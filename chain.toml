@@ -1,4 +1,3 @@
-DisableBootstrap = true
 
 [Package]
   Name = "vibeonline/razorinput"

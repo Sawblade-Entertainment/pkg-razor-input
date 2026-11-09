@@ -1,8 +1,24 @@
 # Razor Input
 Dead simple input handling
-[Documentation](https://sawblade-entertainment.github.io/RazorInput/)
+[Documentation](https://sawblade-entertainment.github.io/pkg-razor-input/)
 
 Download with chainlink (or wally):
 ```
-RazorInput = "vibeonline/razorinput@0.1.0"
+razorinput = "vibeonline/razorinput@0.1.4"
+```
+
+# Project Structure
+- These are test folders ommitted from the published package, run ```chainlink serve``` to test your packages 
+
+```
+client/
+server/
+shared/
+```
+
+- This will be published on ```chainlink publish```
+
+```
+src/
+chain.toml -> wally.toml
 ```

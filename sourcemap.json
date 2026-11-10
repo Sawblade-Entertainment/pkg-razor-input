@@ -11,7 +11,22 @@
     },
     {
       "name": "ReplicatedStorage",
-      "className": "ReplicatedStorage"
+      "className": "ReplicatedStorage",
+      "children": [
+        {
+          "name": "packages",
+          "className": "Folder",
+          "children": [
+            {
+              "name": "razorinput",
+              "className": "ModuleScript",
+              "filePaths": [
+                "src/init.luau"
+              ]
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "ServerScriptService",

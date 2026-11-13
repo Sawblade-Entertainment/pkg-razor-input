@@ -1,7 +1,7 @@
 [Package]
   Name = "vibeonline/razorinput"
   Description = "Oversimplifying input handlers"
-  Version = "0.1.5"
+  Version = "0.1.6"
   License = "MIT"
   Website = "https://sawblade-entertainment.github.io/pkg-razor-input/"
 

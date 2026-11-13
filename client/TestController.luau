@@ -1,5 +1,5 @@
-RazorInput = use "razorinput"
-RunService = use "RunService"
+RazorInput = use("razorinput")
+RunService = use("RunService")
 
 -- Mocking InputObject since it cannot be instantiated in Luau/Roblox
 type MockInputObject = {
@@ -371,7 +371,8 @@ local function runTouchTests()
 	})
 	local tintToggle = Touch.toggle({ position = UDim2.fromOffset(650, 900), backgroundImage = artA })
 	local swapToggle = Touch.toggle({ position = UDim2.fromOffset(800, 900), backgroundImage = artA, onImage = artC })
-	local tintedIcon = Touch.button({ position = UDim2.fromOffset(950, 900), image = artC, iconColor = Color3.new(1, 0, 0) })
+	local tintedIcon =
+		Touch.button({ position = UDim2.fromOffset(950, 900), image = artC, iconColor = Color3.new(1, 0, 0) })
 	RunService.RenderStepped:Wait()
 
 	local imageBase, imageKnob = imageStick.base :: any, imageStick.knob :: any
@@ -427,12 +428,227 @@ local function runTouchTests()
 	Touch.setVisibility("auto")
 end
 
+local function press(key: Enum.KeyCode)
+	RazorInput:input(createMockInput(key, Enum.UserInputState.Begin) :: any)
+end
+
+local function release(key: Enum.KeyCode)
+	RazorInput:input(createMockInput(key, Enum.UserInputState.End) :: any)
+end
+
+-- table.concat only takes strings and numbers.
+local function joined(list: { any }): string
+	local parts = {}
+	for index, value in list do
+		parts[index] = tostring(value)
+	end
+
+	return table.concat(parts, ",")
+end
+
+local function runLayoutTests()
+	local Touch = RazorInput.Touch
+	Touch.setVisibility("always")
+
+	assert(RazorInput:currentLayout() == "Default", "The starting layout should be Default")
+
+	-- Named binds: keys given here are the Default layout.
+	local jumpLog = {}
+	local crouchLog = {}
+	local moveVector = Vector3.zero
+
+	local jumpButton = Touch.button({ name = "LayoutJump", position = UDim2.fromOffset(500, 1200), size = 80 })
+	local moveStick = Touch.thumbstick({ name = "LayoutMove", position = UDim2.fromOffset(200, 1200), size = 100 })
+	local lookPad = Touch.touchpad({
+		name = "LayoutLook",
+		position = UDim2.fromOffset(3000, 3000),
+		size = UDim2.fromOffset(200, 200),
+	})
+
+	RazorInput:bindAction("Jump", function(pressed: boolean)
+		table.insert(jumpLog, pressed)
+	end, "J", jumpButton)
+	RazorInput:bindAction("Crouch", function(pressed: boolean)
+		table.insert(crouchLog, pressed)
+	end, "K")
+	RazorInput:bindAxis("Move", function(_pressed: boolean, value: Vector3)
+		moveVector = value
+	end, RazorInput.createAxis("I", "N", "U", "O"), moveStick)
+
+	press(Enum.KeyCode.J)
+	release(Enum.KeyCode.J)
+	assert(joined(jumpLog) == "true,false", "A named bind should fire from its keys")
+	print("✅ Named binds passed")
+
+	local changes = {}
+	RazorInput.layoutChanged:connect(function(name: string)
+		table.insert(changes, name)
+	end)
+
+	RazorInput:createLayout("Lefty", {
+		keys = {
+			Jump = { "H" },
+			Move = { RazorInput.createAxis("Up", "Down", "Left", "Right") },
+		},
+		touch = {
+			LayoutJump = { position = UDim2.fromOffset(100, 1300), size = 50 },
+			LayoutMove = { position = UDim2.fromOffset(700, 1300), size = 160 },
+			LayoutLook = { visible = false },
+		},
+	})
+	assert(RazorInput:currentLayout() == "Default", "createLayout should not switch layouts")
+
+	local names = RazorInput:getLayouts()
+	assert(names[1] == "Default" and table.find(names, "Lefty"), "getLayouts should list Default and Lefty")
+
+	RazorInput:setLayout("Lefty")
+	assert(RazorInput:currentLayout() == "Lefty", "setLayout should switch the active layout")
+	assert(table.concat(changes, ",") == "Lefty", "layoutChanged should fire with the new layout name")
+
+	-- Keys
+	table.clear(jumpLog)
+	press(Enum.KeyCode.J)
+	release(Enum.KeyCode.J)
+	assert(#jumpLog == 0, "The Default key should stop firing under Lefty")
+	press(Enum.KeyCode.H)
+	release(Enum.KeyCode.H)
+	assert(joined(jumpLog) == "true,false", "Lefty's key should fire Jump")
+
+	press(Enum.KeyCode.Right)
+	assert(moveVector == Vector3.new(1, 0, 0), "Lefty's axis should drive Move")
+	release(Enum.KeyCode.Right)
+
+	table.clear(crouchLog)
+	press(Enum.KeyCode.K)
+	release(Enum.KeyCode.K)
+	assert(#crouchLog == 2, "Binds a layout leaves out keep their Default keys")
+	print("✅ Layout keys passed")
+
+	-- Touch placement
+	RunService.RenderStepped:Wait()
+	assert(jumpButton.root.Position == UDim2.fromOffset(100, 1300), "Layout should move the button")
+	assert(jumpButton.visual.AbsoluteSize.X == 50, "Layout should resize the button")
+	assert(moveStick.base.Position == UDim2.fromOffset(700, 1300), "Layout should move the stick")
+	assert(moveStick.base.AbsoluteSize.X == 160, "Layout should resize the stick")
+	assert(not lookPad.root.Visible, "visible = false should hide the touchpad")
+	assert(not claims(center(lookPad.root)), "A control hidden by the layout should not claim touches")
+
+	-- A stick moved by a layout still reads correctly at its new size.
+	local stickVector = Vector3.zero
+	moveStick.changed:connect(function(value: Vector2)
+		stickVector = Vector3.new(value.X, value.Y, 0)
+	end)
+	local origin = center(moveStick.base)
+	local finger = touchBegin(origin)
+	touchMove(finger, origin + Vector2.new(80, 0))
+	task.wait()
+	assert(near(stickVector.Unit, Vector3.new(1, 0, 0)), "A placed stick should steer")
+	assert(near(moveStick.value, Vector2.new(1, 0)), "A placed stick should read full right at its new size")
+	touchEnd(finger)
+
+	table.clear(jumpLog)
+	finger = touchBegin(center(jumpButton.root))
+	touchEnd(finger)
+	assert(joined(jumpLog) == "true,false", "A placed button should still fire its bind")
+
+	-- setEnabled(true) does not undo a layout's visible = false.
+	lookPad:setEnabled(false)
+	lookPad:setEnabled(true)
+	assert(not lookPad.root.Visible, "setEnabled should respect the layout's visibility")
+
+	-- Controls created later pick up the active layout.
+	local lateButton = Touch.button({ name = "LayoutLate", position = UDim2.fromOffset(900, 1200) })
+	RazorInput:createLayout(
+		"Lefty",
+		(function()
+			local layout = RazorInput:getLayout("Lefty") :: any
+			layout.touch.LayoutLate = { position = UDim2.fromOffset(950, 1250), size = 40 }
+			return layout
+		end)()
+	)
+	assert(lateButton.root.Position == UDim2.fromOffset(950, 1250), "Replacing the active layout should re-apply it")
+	local laterButton = Touch.button({ name = "LayoutLate", position = UDim2.fromOffset(900, 1200) })
+	assert(laterButton.root.Position == UDim2.fromOffset(950, 1250), "New controls should use the active layout")
+	print("✅ Layout touch placement passed")
+
+	-- getLayout fills in Default values.
+	local default = RazorInput:getLayout("Default") :: any
+	assert(default.keys.Jump[1] == "J", "getLayout('Default') should list Default keys")
+	assert(default.touch.LayoutJump.size == 80, "getLayout('Default') should list control configs")
+	local resolved = RazorInput:getLayout() :: any
+	assert(resolved.keys.Jump[1] == "H" and resolved.keys.Crouch[1] == "K", "getLayout should merge over Default")
+	assert(resolved.touch.LayoutLook.visible == false, "getLayout should keep layout placements")
+	assert(resolved.touch.LayoutLook.size == UDim2.fromOffset(200, 200), "getLayout should fill in Default sizes")
+	print("✅ getLayout passed")
+
+	-- Layouts can swap keys between binds.
+	RazorInput:createLayout("Swap", { keys = { Jump = { "K" }, Crouch = { "J" } } })
+	RazorInput:setLayout("Swap")
+	table.clear(jumpLog)
+	table.clear(crouchLog)
+	press(Enum.KeyCode.K)
+	release(Enum.KeyCode.K)
+	press(Enum.KeyCode.J)
+	release(Enum.KeyCode.J)
+	assert(#jumpLog == 2 and #crouchLog == 2, "Swapped keys should fire the other binds")
+	assert(jumpButton.root.Position == UDim2.fromOffset(500, 1200), "Switching back restores Default placement")
+	assert(lookPad.root.Visible, "Switching layouts restores Default visibility")
+	print("✅ Key swap passed")
+
+	-- Switching while a key is held releases it.
+	table.clear(jumpLog)
+	press(Enum.KeyCode.K)
+	RazorInput:setLayout("Lefty")
+	assert(joined(jumpLog) == "true,false", "Switching layouts should release held keys")
+	release(Enum.KeyCode.K)
+
+	-- Binding after a layout is active uses that layout's keys.
+	RazorInput:createLayout("Late", { keys = { Use = { "Y" } } })
+	RazorInput:setLayout("Late")
+	local used = false
+	RazorInput:bindAction("Use", function()
+		used = true
+	end, "T")
+	press(Enum.KeyCode.Y)
+	release(Enum.KeyCode.Y)
+	assert(used, "A bind made under a layout should use its keys")
+
+	-- unbind
+	RazorInput:unbind("Use")
+	used = false
+	press(Enum.KeyCode.Y)
+	assert(not used, "unbind should stop the keys firing")
+	release(Enum.KeyCode.Y)
+
+	-- Removing the active layout returns to Default.
+	RazorInput:removeLayout("Late")
+	assert(RazorInput:currentLayout() == "Default", "Removing the active layout should switch to Default")
+	assert(not table.find(RazorInput:getLayouts(), "Late"), "Removed layouts should not be listed")
+	print("✅ Layout switching passed")
+
+	RazorInput:unbind("Jump")
+	RazorInput:unbind("Crouch")
+	RazorInput:unbind("Move")
+	table.clear(jumpLog)
+	finger = touchBegin(center(jumpButton.root))
+	touchEnd(finger)
+	assert(#jumpLog == 0, "unbind should detach touch controls")
+
+	for _, control in { jumpButton, moveStick, lookPad, lateButton, laterButton } :: { any } do
+		control:destroy()
+	end
+	RazorInput:removeLayout("Lefty")
+	RazorInput:removeLayout("Swap")
+	Touch.setVisibility("auto")
+end
+
 function mod:start()
 	print("Starting RazorInput tests...")
 
 	local success, err = pcall(function()
 		runKeyboardTests()
 		runTouchTests()
+		runLayoutTests()
 	end)
 
 	if not success then

@@ -22,9 +22,21 @@ Util.theme = {
 
 export type Theme = typeof(Util.theme)
 
+-- Where a control sits in a layout. Unset keys fall back to the control's
+-- own config. `size` is a pixel number for buttons and thumbsticks and a UDim2
+-- for touchpads; `zone` is for dynamic thumbsticks, `anchorPoint` for touchpads.
+export type Placement = {
+	position: UDim2?,
+	size: (number | UDim2)?,
+	anchorPoint: Vector2?,
+	zone: { position: UDim2, size: UDim2 }?,
+	visible: boolean?,
+}
+
 -- Anything that can be routed through the touch router.
 export type Control = {
 	__razorControl: true,
+	name: string,
 	priority: number,
 	enabled: boolean,
 	destroyed: boolean,
@@ -34,7 +46,27 @@ export type Control = {
 	_moved: (self: any, input: InputObject, position: Vector2) -> (),
 	_ended: (self: any, input: InputObject?, position: Vector2?) -> (),
 	_bind: (self: any, action: (active: boolean, value: Vector3) -> ()) -> (),
+	_unbind: (self: any, action: (active: boolean, value: Vector3) -> ()) -> (),
+	_place: (self: any, placement: Placement?) -> (),
+	_defaultPlacement: (self: any) -> Placement,
 }
+
+function Util.clonePlacement(placement: Placement): Placement
+	local copy = table.clone(placement)
+	if copy.zone then
+		copy.zone = table.clone(copy.zone)
+	end
+
+	return copy
+end
+
+-- Remove one bound action (the first match) from a control's action list.
+function Util.unbind(actions: { any }, action: any)
+	local index = table.find(actions, action)
+	if index then
+		table.remove(actions, index)
+	end
+end
 
 function Util.resolveTheme(overrides: { [string]: any }?): Theme
 	if not overrides then

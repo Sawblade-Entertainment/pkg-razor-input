@@ -27,6 +27,7 @@ Touchpad.__index = Touchpad
 export type Touchpad = typeof(setmetatable(
 	{} :: {
 		__razorControl: true,
+		name: string,
 		priority: number,
 		enabled: boolean,
 		destroyed: boolean,
@@ -35,6 +36,9 @@ export type Touchpad = typeof(setmetatable(
 		-- delta (screen space, y down), position, active
 		moved: Signal.Signal<Vector2, Vector2, boolean>,
 		root: ImageButton,
+		_defaults: { position: UDim2, size: UDim2, anchorPoint: Vector2 },
+		-- Hidden by the active layout (`visible = false`).
+		_layoutHidden: boolean,
 		_input: any,
 		_last: Vector2,
 		_actions: { (active: boolean, value: Vector3) -> () },
@@ -45,10 +49,17 @@ export type Touchpad = typeof(setmetatable(
 function Touchpad.new(config: Config, parent: GuiBase2d): Touchpad
 	local theme = Util.resolveTheme(config.theme)
 
-	local root = Util.hitbox(config.name or "Touchpad")
-	root.AnchorPoint = config.anchorPoint or Vector2.zero
-	root.Position = config.position or UDim2.fromScale(0.45, 0)
-	root.Size = config.size or UDim2.fromScale(0.55, 1)
+	local name = config.name or "Touchpad"
+	local defaults = {
+		position = config.position or UDim2.fromScale(0.45, 0),
+		size = config.size or UDim2.fromScale(0.55, 1),
+		anchorPoint = config.anchorPoint or Vector2.zero,
+	}
+
+	local root = Util.hitbox(name)
+	root.AnchorPoint = defaults.anchorPoint
+	root.Position = defaults.position
+	root.Size = defaults.size
 
 	if config.debug then
 		root.BackgroundTransparency = 0.92
@@ -60,6 +71,7 @@ function Touchpad.new(config: Config, parent: GuiBase2d): Touchpad
 
 	return setmetatable({
 		__razorControl = true :: true,
+		name = name,
 		priority = config.priority or 10,
 		enabled = true,
 		destroyed = false,
@@ -67,6 +79,8 @@ function Touchpad.new(config: Config, parent: GuiBase2d): Touchpad
 		sensitivity = config.sensitivity or 1,
 		moved = Signal.new() :: Signal.Signal<Vector2, Vector2, boolean>,
 		root = root,
+		_defaults = defaults,
+		_layoutHidden = false,
 		_input = nil,
 		_last = Vector2.zero,
 		_actions = {},
@@ -122,9 +136,35 @@ function Touchpad._bind(self: Touchpad, action: (active: boolean, value: Vector3
 	table.insert(self._actions, action)
 end
 
+function Touchpad._unbind(self: Touchpad, action: (active: boolean, value: Vector3) -> ())
+	Util.unbind(self._actions, action)
+end
+
+-- Apply a layout placement; nil restores the touchpad's own config.
+function Touchpad._place(self: Touchpad, placement: Util.Placement?)
+	local defaults = self._defaults
+	local root = self.root
+
+	root.Position = if placement and placement.position then placement.position else defaults.position
+	root.Size = if placement and typeof(placement.size) == "UDim2" then placement.size :: UDim2 else defaults.size
+	root.AnchorPoint = if placement and placement.anchorPoint then placement.anchorPoint else defaults.anchorPoint
+
+	self._layoutHidden = placement ~= nil and placement.visible == false
+	root.Visible = self.enabled and not self._layoutHidden
+
+	if self._layoutHidden then
+		self:_ended(nil, nil)
+	end
+end
+
+function Touchpad._defaultPlacement(self: Touchpad): Util.Placement
+	local defaults = self._defaults
+	return { position = defaults.position, size = defaults.size, anchorPoint = defaults.anchorPoint, visible = true }
+end
+
 function Touchpad.setEnabled(self: Touchpad, enabled: boolean)
 	self.enabled = enabled
-	self.root.Visible = enabled
+	self.root.Visible = enabled and not self._layoutHidden
 
 	if not enabled then
 		self:_ended(nil, nil)

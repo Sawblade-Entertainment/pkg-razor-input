@@ -41,6 +41,7 @@ Thumbstick.__index = Thumbstick
 export type Thumbstick = typeof(setmetatable(
 	{} :: {
 		__razorControl: true,
+		name: string,
 		priority: number,
 		enabled: boolean,
 		destroyed: boolean,
@@ -56,6 +57,11 @@ export type Thumbstick = typeof(setmetatable(
 		_hideWhenIdle: boolean,
 		_deadzone: number,
 		_size: number,
+		_knobScale: number,
+		_hitScale: number,
+		_defaults: { position: UDim2, size: number, zone: { position: UDim2, size: UDim2 }? },
+		-- Hidden by the active layout (`visible = false`).
+		_layoutHidden: boolean,
 		_restPosition: UDim2,
 		_origin: Vector2,
 		_parent: GuiBase2d,
@@ -82,14 +88,18 @@ function Thumbstick.new(config: Config, parent: GuiBase2d): Thumbstick
 	local position = config.position or UDim2.new(0, 32 + size / 2, 1, -(32 + size / 2))
 	local dynamic = config.dynamic == true
 	local name = config.name or "Thumbstick"
+	local hitScale = config.hitScale or 1.35
+	local knobScale = config.knobScale or 0.45
+	local zone = if dynamic
+		then config.zone or { position = UDim2.fromScale(0, 0.3), size = UDim2.fromScale(0.45, 0.7) }
+		else nil
 
 	local root = Util.hitbox(name)
-	if dynamic then
-		local zone = config.zone or { position = UDim2.fromScale(0, 0.3), size = UDim2.fromScale(0.45, 0.7) }
+	if zone then
 		root.Position = zone.position
 		root.Size = zone.size
 	else
-		local hitSize = size * (config.hitScale or 1.35)
+		local hitSize = size * hitScale
 		root.AnchorPoint = Vector2.new(0.5, 0.5)
 		root.Position = position
 		root.Size = UDim2.fromOffset(hitSize, hitSize)
@@ -106,7 +116,7 @@ function Thumbstick.new(config: Config, parent: GuiBase2d): Thumbstick
 	base.Position = position
 	base.ZIndex = 2
 
-	local knobSize = size * (config.knobScale or 0.45)
+	local knobSize = size * knobScale
 	local knobDimensions = UDim2.fromOffset(knobSize, knobSize)
 	local knob: GuiObject = if config.knobImage
 		then Util.image("Knob", knobDimensions, config.knobImage)
@@ -120,6 +130,7 @@ function Thumbstick.new(config: Config, parent: GuiBase2d): Thumbstick
 
 	local self = setmetatable({
 		__razorControl = true :: true,
+		name = name,
 		priority = config.priority or 20,
 		enabled = true,
 		destroyed = false,
@@ -134,6 +145,10 @@ function Thumbstick.new(config: Config, parent: GuiBase2d): Thumbstick
 		_hideWhenIdle = dynamic and config.hideWhenIdle == true,
 		_deadzone = math.clamp(config.deadzone or 0.12, 0, 0.95),
 		_size = size,
+		_knobScale = knobScale,
+		_hitScale = hitScale,
+		_defaults = { position = position, size = size, zone = zone },
+		_layoutHidden = false,
 		_restPosition = position,
 		_origin = Vector2.zero,
 		_parent = parent,
@@ -147,7 +162,7 @@ function Thumbstick.new(config: Config, parent: GuiBase2d): Thumbstick
 end
 
 function Thumbstick._setIdleVisual(self: Thumbstick)
-	self.base.Visible = not self._hideWhenIdle or self.active
+	self.base.Visible = self.enabled and not self._layoutHidden and (not self._hideWhenIdle or self.active)
 end
 
 function Thumbstick._radius(self: Thumbstick): number
@@ -244,10 +259,58 @@ function Thumbstick._bind(self: Thumbstick, action: (active: boolean, value: Vec
 	table.insert(self._actions, action)
 end
 
+function Thumbstick._unbind(self: Thumbstick, action: (active: boolean, value: Vector3) -> ())
+	Util.unbind(self._actions, action)
+end
+
+-- Apply a layout placement; nil restores the stick's own config.
+function Thumbstick._place(self: Thumbstick, placement: Util.Placement?)
+	-- Re-centering a held stick would leave its origin stale.
+	self:_ended(nil, nil)
+
+	local defaults = self._defaults
+	local size = if placement and type(placement.size) == "number" then placement.size :: number else defaults.size
+	local position = if placement and placement.position then placement.position else defaults.position
+
+	self._size = size
+	self._restPosition = position
+	self.base.Size = UDim2.fromOffset(size, size)
+	self.base.Position = position
+
+	local knobSize = size * self._knobScale
+	self.knob.Size = UDim2.fromOffset(knobSize, knobSize)
+
+	if self._dynamic then
+		local zone = (
+			if placement and placement.zone then placement.zone else defaults.zone
+		) :: { position: UDim2, size: UDim2 }
+		self.root.Position = zone.position
+		self.root.Size = zone.size
+	else
+		local hitSize = size * self._hitScale
+		self.root.Position = position
+		self.root.Size = UDim2.fromOffset(hitSize, hitSize)
+	end
+
+	self._layoutHidden = placement ~= nil and placement.visible == false
+	self.root.Visible = self.enabled and not self._layoutHidden
+	self:_setIdleVisual()
+end
+
+function Thumbstick._defaultPlacement(self: Thumbstick): Util.Placement
+	local defaults = self._defaults
+	return {
+		position = defaults.position,
+		size = defaults.size,
+		zone = if defaults.zone then table.clone(defaults.zone) else nil,
+		visible = true,
+	}
+end
+
 function Thumbstick.setEnabled(self: Thumbstick, enabled: boolean)
 	self.enabled = enabled
-	self.root.Visible = enabled
-	self.base.Visible = enabled and (not self._hideWhenIdle or self.active)
+	self.root.Visible = enabled and not self._layoutHidden
+	self:_setIdleVisual()
 
 	if not enabled then
 		self:_ended(nil, nil)

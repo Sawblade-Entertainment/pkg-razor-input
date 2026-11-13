@@ -25,6 +25,7 @@ export type Button = Button.Button
 export type Touchpad = Touchpad.Touchpad
 export type Gestures = Gestures.Gestures
 export type Visibility = "auto" | "always" | "never"
+export type Placement = Util.Placement
 
 local Touch = {}
 
@@ -34,6 +35,8 @@ Touch.theme = Util.theme
 local controls: { Util.Control } = {}
 local recognizers: { Gestures } = {}
 local claims: { [any]: Util.Control } = {}
+-- Placements from the active layout, keyed by control name.
+local placements: { [string]: Placement } = {}
 
 local screenGui: ScreenGui? = nil
 local visibility: Visibility = "auto"
@@ -140,7 +143,42 @@ local function register(control: any)
 
 	table.insert(controls, index, control)
 
+	local placement = placements[control.name]
+	if placement then
+		control:_place(placement)
+	end
+
 	return control
+end
+
+-- Used by RazorInput.setLayout: place every control by name. Controls without
+-- an entry go back to their own config. Later controls pick it up on creation.
+function Touch._applyLayout(layout: { [string]: Placement }?)
+	placements = layout or {}
+
+	for index = #controls, 1, -1 do
+		local control = controls[index]
+
+		if control.destroyed then
+			table.remove(controls, index)
+		else
+			control:_place(placements[control.name])
+		end
+	end
+end
+
+-- Each control's placement from its own config, keyed by name (the first
+-- control found wins when names repeat).
+function Touch._defaultPlacements(): { [string]: Placement }
+	local result: { [string]: Placement } = {}
+
+	for _, control in controls do
+		if not control.destroyed and result[control.name] == nil then
+			result[control.name] = control:_defaultPlacement()
+		end
+	end
+
+	return result
 end
 
 function Touch.thumbstick(config: Thumbstick.Config?): Thumbstick

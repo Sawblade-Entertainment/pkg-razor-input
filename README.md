@@ -4,7 +4,7 @@ Dead simple input handling, including mobile controls (thumbsticks, buttons, tog
 
 Download with chainlink (or wally):
 ```
-razorinput = "vibeonline/razorinput@0.1.4"
+razorinput = "vibeonline/razorinput@0.1.6"
 ```
 
 # Project Structure

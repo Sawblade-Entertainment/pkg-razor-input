@@ -7,7 +7,7 @@ Dead simple input handling for Roblox.
 Install via Wally:
 
 ```toml
-RazorInput = "vibeonline/razorinput@0.1.0"
+RazorInput = "vibeonline/razorinput@0.1.6"
 ```
 
 ## Quick Start
@@ -68,6 +68,80 @@ Binds one or more keys (or touch buttons) to a specific action.
 
 #### `input(inp: InputObject, gameProcessed: boolean?)`
 The entry point for processing input. Call it from `UserInputService.InputBegan`, `InputChanged` and `InputEnded`. Touch inputs are routed to `RazorInput.Touch`; pass `gameProcessed` so gestures ignore touches on other UI.
+
+## Layouts
+
+A layout is a named control scheme: which keys trigger each bind, and where each touch control sits. Players can switch between layouts at any time, and you can build new ones at runtime (for example from a settings menu).
+
+Give a bind a name as its first argument to make it layout-aware. The keys and controls you pass are the **`"Default"`** layout:
+
+```lua
+local Touch = RazorInput.Touch
+
+local stick = Touch.thumbstick({ name = "Move" })
+local jump = Touch.button({ name = "Jump", text = "Jump" })
+local look = Touch.touchpad({ name = "Look" })
+
+RazorInput:bindAxis("Move", onMove, RazorInput.createAxis("W", "S", "A", "D"), stick)
+RazorInput:bindAction("Jump", onJump, "Space", "ButtonA", jump)
+```
+
+Create another layout. `keys` is keyed by **bind name**, `touch` by **control name** (the control's `name` option). Anything a layout leaves out keeps its `"Default"` keys and placement.
+
+```lua
+RazorInput:createLayout("Left-handed", {
+    keys = {
+        Move = { RazorInput.createAxis("Up", "Down", "Left", "Right") },
+        Jump = { "RightControl", "ButtonA" },
+    },
+    touch = {
+        Move = { position = UDim2.new(1, -110, 1, -110) },
+        Jump = { position = UDim2.new(0, 80, 1, -80), size = 90 },
+        Look = { position = UDim2.fromScale(0, 0), size = UDim2.fromScale(0.55, 1) },
+    },
+})
+
+RazorInput:setLayout("Left-handed")
+RazorInput:setLayout("Default")
+```
+
+To let players customise a layout, start from a filled-in copy, change it, and save it under a name:
+
+```lua
+local layout = RazorInput:getLayout() -- the active layout, with Default filled in
+layout.keys.Jump = { "F" }
+layout.touch.Jump.size = 110
+RazorInput:createLayout("Custom", layout)
+RazorInput:setLayout("Custom")
+```
+
+| Function | Description |
+|---|---|
+| `bindAction(name, action, ...)` / `bindAxis(name, action, ...)` | Named bind. Binding the same name again replaces it. |
+| `unbind(name)` | Remove a named bind: its keys and touch controls stop calling its action. |
+| `createLayout(name, layout)` | Add or replace a layout. Replacing the active layout re-applies it. `"Default"` can't be replaced. |
+| `setLayout(name)` | Switch every named bind's keys and every touch control's placement. Keys held at the time are released (the action gets `false`). |
+| `removeLayout(name)` | Delete a layout; removing the active one switches to `"Default"`. |
+| `currentLayout(): string` | Name of the active layout. |
+| `getLayouts(): { string }` | Every layout name, `"Default"` first. |
+| `getLayout(name?): Layout?` | A copy of a layout (active one by default) with everything it leaves out filled in from `"Default"`. |
+| `layoutChanged` | Signal fired with the layout name when `setLayout` switches layouts. |
+
+A layout's `keys` entry lists key names and/or `createAxis` tables, just like the bind's own arguments; `{}` leaves the bind with no keys. A `touch` placement can set:
+
+| Key | Applies to | Description |
+|---|---|---|
+| `position` | all | `UDim2`, same meaning as the control's `position` option |
+| `size` | all | Pixels (`number`) for buttons and thumbsticks, `UDim2` for touchpads |
+| `zone` | dynamic thumbsticks | `{ position: UDim2, size: UDim2 }` |
+| `anchorPoint` | touchpads | `Vector2` |
+| `visible` | all | `false` hides the control and stops it taking touches |
+
+Notes:
+- Controls are matched by `name`, so give each control you want to place a unique name. Controls created after `setLayout` pick up the active layout.
+- Unnamed binds (`bindAction(action, ...)`) work as before and ignore layouts.
+- A key drives one bind at a time; the last bind to claim it wins.
+- `visible = false` is separate from `setEnabled`: a control shows only when it is enabled *and* the layout shows it.
 
 ## Mobile controls
 

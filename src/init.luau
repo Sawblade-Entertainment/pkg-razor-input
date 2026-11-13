@@ -2,14 +2,232 @@
 --!native
 --!optimize 2
 
+local Signal = require(script.Signal)
 local Touch = require(script.Touch)
+
+export type Action = (pressed: boolean, value: Vector3) -> ()
+-- A key name ("Space", "ButtonA") or an axis from createAxis.
+export type KeySpec = string | { string }
+export type Placement = Touch.Placement
+-- Keys per bind name and touch placements per control name. Anything left
+-- out keeps what the "Default" layout gives it.
+export type Layout = {
+	keys: { [string]: { KeySpec } }?,
+	touch: { [string]: Placement }?,
+}
+
+type Kind = "action" | "axis"
+
+-- A bind created with a name, so layouts can change its keys.
+type Named = {
+	kind: Kind,
+	action: Action,
+	-- Keys given to bindAction/bindAxis: the "Default" layout.
+	keys: { KeySpec },
+	controls: { any },
+	-- Handlers currently in InputBinds.
+	codes: { [Enum.KeyCode]: Action },
+	-- Releases any key still held under the current handlers.
+	release: () -> (),
+}
+
+local DEFAULT = "Default"
 
 local InputController = {}
 
 -- Mobile controls: thumbsticks, buttons, toggles, touchpads and gestures.
 InputController.Touch = Touch
 
-local InputBinds: { [Enum.KeyCode]: any } = {}
+-- Fires with the layout name after setLayout switches layouts.
+InputController.layoutChanged = Signal.new() :: Signal.Signal<string>
+
+local InputBinds: { [Enum.KeyCode]: Action } = {}
+
+local named: { [string]: Named } = {}
+local layouts: { [string]: Layout } = {}
+local current = DEFAULT
+
+local function keyCode(name: string): Enum.KeyCode?
+	local code = Enum.KeyCode:FromName(name)
+
+	if not code then
+		warn(name .. " is not a valid KeyCode name")
+	end
+
+	return code
+end
+
+-- Build key handlers for `keys`. Returns them by KeyCode, plus a function
+-- that releases whatever is still held through them.
+local function buildHandlers(kind: Kind, action: Action, keys: { KeySpec }): ({ [Enum.KeyCode]: Action }, () -> ())
+	local handlers: { [Enum.KeyCode]: Action } = {}
+	local held: { [Enum.KeyCode]: boolean } = {}
+	local axes: { { number } } = {}
+
+	for _, spec in keys do
+		if type(spec) == "table" then
+			if kind ~= "axis" then
+				warn("Axis tables can only be bound with bindAxis")
+				continue
+			end
+
+			local axisDir = { 0, 0, 0, 0 } -- UP, DOWN, LEFT, RIGHT
+			table.insert(axes, axisDir)
+
+			for i = 1, 4 do
+				local name = spec[i]
+				local code = if type(name) == "string" then keyCode(name) else nil
+				if not code then
+					continue
+				end
+
+				handlers[code] = function(pressed: boolean)
+					axisDir[i] = (pressed and 1) or 0
+
+					action(pressed, Vector3.new(axisDir[4] - axisDir[3], axisDir[1] - axisDir[2]))
+				end
+			end
+		elseif type(spec) == "string" then
+			local code = keyCode(spec)
+			if not code then
+				continue
+			end
+
+			handlers[code] = function(pressed: boolean, position: Vector3)
+				if pressed then
+					held[code] = true
+				else
+					held[code] = nil
+				end
+
+				action(pressed, position)
+			end
+		end
+	end
+
+	local function release()
+		for code in held do
+			held[code] = nil
+			action(false, Vector3.zero)
+		end
+
+		for _, axisDir in axes do
+			if axisDir[1] + axisDir[2] + axisDir[3] + axisDir[4] > 0 then
+				axisDir[1], axisDir[2], axisDir[3], axisDir[4] = 0, 0, 0, 0
+				action(false, Vector3.zero)
+			end
+		end
+	end
+
+	return handlers, release
+end
+
+local function cloneKeys(keys: { KeySpec }): { KeySpec }
+	local copy: { KeySpec } = {}
+	for index, spec in keys do
+		copy[index] = if type(spec) == "table" then table.clone(spec) else spec
+	end
+
+	return copy
+end
+
+local function cloneLayout(layout: Layout): Layout
+	local keys: { [string]: { KeySpec } } = {}
+	local sourceKeys: { [string]: { KeySpec } } = layout.keys or {}
+	for name, specs in sourceKeys do
+		keys[name] = cloneKeys(specs)
+	end
+
+	local touch: { [string]: Placement } = {}
+	local sourceTouch: { [string]: Placement } = layout.touch or {}
+	for name, placement in sourceTouch do
+		local copy = table.clone(placement)
+		if copy.zone then
+			copy.zone = table.clone(copy.zone)
+		end
+		touch[name] = copy
+	end
+
+	return { keys = keys, touch = touch }
+end
+
+local function keysFor(name: string, entry: Named): { KeySpec }
+	local layout = layouts[current]
+	local override = layout and layout.keys and layout.keys[name]
+
+	return override or entry.keys
+end
+
+local function attachKeys(entry: Named, keys: { KeySpec })
+	local handlers, release = buildHandlers(entry.kind, entry.action, keys)
+
+	for code, handler in handlers do
+		InputBinds[code] = handler
+	end
+
+	entry.codes = handlers
+	entry.release = release
+end
+
+local function detachKeys(entry: Named)
+	entry.release()
+
+	for code, handler in entry.codes do
+		-- Leave keys alone that something bound later has taken over.
+		if InputBinds[code] == handler then
+			InputBinds[code] = nil
+		end
+	end
+
+	entry.codes = {}
+end
+
+local function bindNamed(kind: Kind, name: string, action: Action, args: { any })
+	assert(type(action) == "function", "bind" .. kind .. '("' .. name .. '", action, ...) needs an action function')
+
+	InputController:unbind(name)
+
+	local keys: { KeySpec } = {}
+	local controls = {}
+
+	for _, event in args do
+		if Touch.isControl(event) then
+			event:_bind(action)
+			table.insert(controls, event)
+		elseif type(event) == "string" or type(event) == "table" then
+			table.insert(keys, if type(event) == "table" then table.clone(event) else event)
+		end
+	end
+
+	local entry: Named = {
+		kind = kind,
+		action = action,
+		keys = keys,
+		controls = controls,
+		codes = {},
+		release = function() end,
+	}
+
+	named[name] = entry
+	attachKeys(entry, keysFor(name, entry))
+end
+
+local function bindUnnamed(kind: Kind, action: Action, args: { any })
+	local keys: { KeySpec } = {}
+
+	for _, event in args do
+		if Touch.isControl(event) then
+			event:_bind(action)
+		elseif type(event) == "string" or type(event) == "table" then
+			table.insert(keys, event)
+		end
+	end
+
+	local handlers = buildHandlers(kind, action, keys)
+	for code, handler in handlers do
+		InputBinds[code] = handler
+	end
+end
 
 function InputController.createAxis(up: string, down: string, left: string, right: string): { string }
 	return { up, down, left, right }
@@ -18,58 +236,149 @@ end
 -- Touch controls passed to bindAxis/bindAction call `action(active, value)`:
 -- thumbsticks pass their direction, touchpads their drag delta, and buttons
 -- the touch position (toggles pass their on/off state as `active`).
-function InputController:bindAxis(action: any, ...: { string } | string | any)
-	for _, event in pairs(table.pack(...)) do
-		if Touch.isControl(event) then
-			event:_bind(action)
-		elseif type(event) == "table" then
-			local axisDir = { 0, 0, 0, 0 } -- UP, DOWN, LEFT, RIGHT
+--
+-- Pass a name first (`bindAxis("Move", action, ...)`) to let layouts change
+-- its keys. The keys given here are what the "Default" layout uses.
+function InputController:bindAxis(nameOrAction: string | Action, ...: any)
+	if type(nameOrAction) == "string" then
+		bindNamed("axis", nameOrAction, (...), { select(2, ...) })
+		return
+	end
 
-			for i = 1, 4 do
-				local code = Enum.KeyCode:FromName(event[i])
+	bindUnnamed("axis", nameOrAction, { ... })
+end
 
-				if not code then
-					warn(event[i] .. " is not a valid KeyCode name")
+function InputController:bindAction(nameOrAction: string | Action, ...: any)
+	if type(nameOrAction) == "string" then
+		bindNamed("action", nameOrAction, (...), { select(2, ...) })
+		return
+	end
 
-					continue
-				end
+	bindUnnamed("action", nameOrAction, { ... })
+end
 
-				InputBinds[code] = function(pressed: boolean)
-					axisDir[i] = (pressed and 1) or 0
+-- Remove a named bind: its keys stop firing and its touch controls stop
+-- calling its action.
+function InputController:unbind(name: string)
+	local entry = named[name]
+	if not entry then
+		return
+	end
 
-					action(pressed, Vector3.new(axisDir[4] - axisDir[3], axisDir[1] - axisDir[2]))
-				end
-			end
-		elseif type(event) == "string" then
-			local code = Enum.KeyCode:FromName(event)
+	named[name] = nil
+	detachKeys(entry)
 
-			if not code then
-				warn(event .. " is not a valid KeyCode name")
-
-				continue
-			end
-
-			InputBinds[code] = action
+	for _, control in entry.controls do
+		if not control.destroyed then
+			control:_unbind(entry.action)
 		end
 	end
 end
 
-function InputController:bindAction(action: any, ...: string | any)
-	for _, event in pairs(table.pack(...)) do
-		if Touch.isControl(event) then
-			event:_bind(action)
-		elseif type(event) == "string" then
-			local code = Enum.KeyCode:FromName(event)
+-- Add (or replace) a layout. `layout.keys` maps bind names to key lists,
+-- `layout.touch` maps control names to placements. Anything not listed keeps
+-- its "Default" keys / placement.
+function InputController:createLayout(name: string, layout: Layout)
+	assert(type(name) == "string", "createLayout needs a layout name")
+	assert(name ~= DEFAULT, '"Default" is built from your binds and control configs and cannot be replaced')
+	assert(type(layout) == "table", "createLayout needs a layout table")
 
-			if not code then
-				warn(event .. " is not a valid KeyCode name")
+	layouts[name] = cloneLayout(layout)
 
-				continue
+	if current == name then
+		self:setLayout(name)
+	end
+end
+
+-- Switch every named bind's keys and every touch control's placement.
+function InputController:setLayout(name: string)
+	local layout = layouts[name]
+	assert(name == DEFAULT or layout, 'No layout named "' .. tostring(name) .. '"')
+
+	local previous = current
+	current = name
+
+	-- Detach everything first so layouts can swap keys between binds.
+	for _, entry in named do
+		detachKeys(entry)
+	end
+
+	for bindName, entry in named do
+		attachKeys(entry, keysFor(bindName, entry))
+	end
+
+	Touch._applyLayout(if layout then layout.touch else nil)
+
+	if previous ~= name then
+		InputController.layoutChanged:fire(name)
+	end
+end
+
+-- Delete a layout. Removing the active one switches back to "Default".
+function InputController:removeLayout(name: string)
+	assert(name ~= DEFAULT, '"Default" cannot be removed')
+
+	if not layouts[name] then
+		return
+	end
+
+	layouts[name] = nil
+
+	if current == name then
+		self:setLayout(DEFAULT)
+	end
+end
+
+-- Name of the active layout.
+function InputController:currentLayout(): string
+	return current
+end
+
+-- Every layout name, starting with "Default".
+function InputController:getLayouts(): { string }
+	local names = {}
+	for name in layouts do
+		table.insert(names, name)
+	end
+	table.sort(names)
+	table.insert(names, 1, DEFAULT)
+
+	return names
+end
+
+-- A copy of a layout (the active one by default) with everything it leaves
+-- out filled in from "Default", ready to tweak and pass to createLayout.
+function InputController:getLayout(name: string?): Layout?
+	local layoutName = name or current
+	local layout = layouts[layoutName]
+	if layoutName ~= DEFAULT and not layout then
+		return nil
+	end
+
+	local keys: { [string]: { KeySpec } } = {}
+	for bindName, entry in named do
+		keys[bindName] = entry.keys
+	end
+
+	local touch = Touch._defaultPlacements()
+
+	if layout then
+		local layoutKeys: { [string]: { KeySpec } } = layout.keys or {}
+		for bindName, specs in layoutKeys do
+			keys[bindName] = specs
+		end
+
+		local layoutTouch: { [string]: Placement } = layout.touch or {}
+		for controlName, placement in layoutTouch do
+			local merged = touch[controlName] or {}
+			for key, value in placement :: any do
+				(merged :: any)[key] = value
 			end
-
-			InputBinds[code] = action
+			touch[controlName] = merged
 		end
 	end
+
+	return cloneLayout({ keys = keys, touch = touch })
 end
 
 -- Call from InputBegan, InputChanged and InputEnded. Pass gameProcessed so

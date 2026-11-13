@@ -45,6 +45,7 @@ Button.__index = Button
 export type Button = typeof(setmetatable(
 	{} :: {
 		__razorControl: true,
+		name: string,
 		priority: number,
 		enabled: boolean,
 		destroyed: boolean,
@@ -62,6 +63,12 @@ export type Button = typeof(setmetatable(
 		_scale: UIScale,
 		_stroke: UIStroke?,
 		_images: { background: string, pressed: string?, on: string? }?,
+		_textConstraint: UITextSizeConstraint?,
+		_rounded: boolean,
+		_hitScale: number,
+		_defaults: { position: UDim2, size: number },
+		-- Hidden by the active layout (`visible = false`).
+		_layoutHidden: boolean,
 		_touches: { [any]: boolean },
 		_touchCount: number,
 		_actions: { (active: boolean, value: Vector3) -> () },
@@ -76,10 +83,13 @@ function Button.new(config: Config, parent: GuiBase2d): Button
 	local isToggle = config.toggle == true
 	local name = config.name or (if isToggle then "Toggle" else "Button")
 
+	local hitScale = config.hitScale or 1.15
+	local position = config.position or UDim2.new(1, -(32 + size / 2), 1, -(32 + size / 2))
+
 	local root = Util.hitbox(name)
-	local hitSize = size * (config.hitScale or 1.15)
+	local hitSize = size * hitScale
 	root.AnchorPoint = Vector2.new(0.5, 0.5)
-	root.Position = config.position or UDim2.new(1, -(32 + size / 2), 1, -(32 + size / 2))
+	root.Position = position
 	root.Size = UDim2.fromOffset(hitSize, hitSize)
 
 	local visualSize = UDim2.fromOffset(size, size)
@@ -120,6 +130,7 @@ function Button.new(config: Config, parent: GuiBase2d): Button
 	end
 
 	local label: TextLabel? = nil
+	local textConstraint: UITextSizeConstraint? = nil
 	if config.text then
 		local text = Instance.new("TextLabel")
 		text.Name = "Label"
@@ -140,12 +151,14 @@ function Button.new(config: Config, parent: GuiBase2d): Button
 		constraint.Parent = text
 
 		label = text
+		textConstraint = constraint
 	end
 
 	root.Parent = parent
 
 	local self = setmetatable({
 		__razorControl = true :: true,
+		name = name,
 		priority = config.priority or 30,
 		enabled = true,
 		destroyed = false,
@@ -160,6 +173,11 @@ function Button.new(config: Config, parent: GuiBase2d): Button
 		_scale = scale,
 		_stroke = stroke,
 		_images = images,
+		_textConstraint = textConstraint,
+		_rounded = images == nil and config.shape == "rounded",
+		_hitScale = hitScale,
+		_defaults = { position = position, size = size },
+		_layoutHidden = false,
 		_touches = {},
 		_touchCount = 0,
 		_actions = {},
@@ -282,6 +300,47 @@ function Button._bind(self: Button, action: (active: boolean, value: Vector3) ->
 	table.insert(self._actions, action)
 end
 
+function Button._unbind(self: Button, action: (active: boolean, value: Vector3) -> ())
+	Util.unbind(self._actions, action)
+end
+
+function Button._resize(self: Button, size: number)
+	local hitSize = size * self._hitScale
+	self.root.Size = UDim2.fromOffset(hitSize, hitSize)
+	self.visual.Size = UDim2.fromOffset(size, size)
+
+	if self._rounded then
+		local corner = self.visual:FindFirstChildOfClass("UICorner")
+		if corner then
+			corner.CornerRadius = UDim.new(0, math.floor(size * 0.22))
+		end
+	end
+
+	if self._textConstraint then
+		self._textConstraint.MaxTextSize = math.max(12, math.floor(size * 0.32))
+	end
+end
+
+-- Apply a layout placement; nil restores the button's own config.
+function Button._place(self: Button, placement: Util.Placement?)
+	local defaults = self._defaults
+	local size = if placement and type(placement.size) == "number" then placement.size :: number else defaults.size
+
+	self.root.Position = if placement and placement.position then placement.position else defaults.position
+	self:_resize(size)
+
+	self._layoutHidden = placement ~= nil and placement.visible == false
+	self.root.Visible = self.enabled and not self._layoutHidden
+
+	if self._layoutHidden then
+		self:_ended(nil, nil)
+	end
+end
+
+function Button._defaultPlacement(self: Button): Util.Placement
+	return { position = self._defaults.position, size = self._defaults.size, visible = true }
+end
+
 -- Toggles only: change the state from code. Fires `changed` unless `silent`.
 function Button.set(self: Button, on: boolean, silent: boolean?)
 	assert(self.isToggle, "set() is only available on toggle buttons")
@@ -322,7 +381,7 @@ end
 
 function Button.setEnabled(self: Button, enabled: boolean)
 	self.enabled = enabled
-	self.root.Visible = enabled
+	self.root.Visible = enabled and not self._layoutHidden
 
 	if not enabled then
 		self:_ended(nil, nil)

@@ -642,6 +642,119 @@ local function runLayoutTests()
 	Touch.setVisibility("auto")
 end
 
+local function mockMouse(inputType: Enum.UserInputType, state: Enum.UserInputState, delta: Vector2?): any
+	return {
+		KeyCode = Enum.KeyCode.None,
+		UserInputType = inputType,
+		UserInputState = state,
+		Position = Vector3.new(400, 300, 0),
+		Delta = if delta then Vector3.new(delta.X, delta.Y, 0) else Vector3.zero,
+	}
+end
+
+local function mouseMove(delta: Vector2)
+	RazorInput:input(mockMouse(Enum.UserInputType.MouseMovement, Enum.UserInputState.Change, delta))
+end
+
+local function runMouseTests()
+	-- Free look: every movement is reported, with the touchpad's shape.
+	local look = RazorInput.mouseLook({ sensitivity = 0.5 })
+	local moves: { { any } } = {}
+	look.moved:connect(function(delta: Vector2, position: Vector2, active: boolean)
+		table.insert(moves, { delta, position, active })
+	end)
+
+	local bound: Vector3? = nil
+	RazorInput:bindAxis("MouseLookTest", function(_active: boolean, value: Vector3)
+		bound = value
+	end, look)
+
+	mouseMove(Vector2.new(10, 4))
+	assert(#moves == 1, "Mouse movement should fire moved")
+	assert(near(moves[1][1], Vector2.new(5, 2)), "Delta should be scaled by sensitivity")
+	assert(near(moves[1][2], Vector2.new(400, 300)), "moved should pass the cursor position")
+	assert(moves[1][3] == true, "Free look is always active")
+	assert(bound and near(bound, Vector3.new(5, -2, 0)), "bindAxis should get the delta with y up, like a touchpad")
+
+	mouseMove(Vector2.zero)
+	assert(#moves == 1, "A zero delta should not fire")
+
+	look:setEnabled(false)
+	assert(
+		#moves == 2 and moves[2][3] == false and near(moves[2][1], Vector2.zero),
+		"Disabling should fire a final stop"
+	)
+	mouseMove(Vector2.new(3, 3))
+	assert(#moves == 2, "A disabled look should not report movement")
+	look:setEnabled(true)
+	mouseMove(Vector2.new(2, 0))
+	assert(#moves == 3 and moves[3][3] == true, "Re-enabling should resume reporting")
+
+	RazorInput:unbind("MouseLookTest")
+	bound = nil
+	mouseMove(Vector2.new(2, 0))
+	assert(bound == nil, "unbind should detach the mouse look")
+	look:destroy()
+	print("✅ Mouse look passed")
+
+	-- Hold-to-look: only while the button is held.
+	local drag = RazorInput.mouseLook({ button = "MouseButton2" })
+	local dragMoves: { { any } } = {}
+	drag.moved:connect(function(delta: Vector2, _position: Vector2, active: boolean)
+		table.insert(dragMoves, { delta, active })
+	end)
+
+	mouseMove(Vector2.new(4, 0))
+	assert(#dragMoves == 0, "Movement without the button should not fire")
+
+	RazorInput:input(mockMouse(Enum.UserInputType.MouseButton2, Enum.UserInputState.Begin), true)
+	mouseMove(Vector2.new(4, 0))
+	assert(#dragMoves == 0, "A press on other UI should not start looking")
+	RazorInput:input(mockMouse(Enum.UserInputType.MouseButton2, Enum.UserInputState.End))
+
+	RazorInput:input(mockMouse(Enum.UserInputType.MouseButton2, Enum.UserInputState.Begin))
+	assert(drag.active, "Holding the button should make the look active")
+	mouseMove(Vector2.new(4, -2))
+	assert(#dragMoves == 1 and near(dragMoves[1][1], Vector2.new(4, -2)), "Movement while held should fire")
+	RazorInput:input(mockMouse(Enum.UserInputType.MouseButton2, Enum.UserInputState.End))
+	assert(#dragMoves == 2 and dragMoves[2][2] == false, "Releasing should fire a final zero delta")
+	mouseMove(Vector2.new(4, 0))
+	assert(#dragMoves == 2, "Movement after release should not fire")
+
+	drag:destroy()
+	print("✅ Mouse look (hold button) passed")
+end
+
+local function runDeviceTests()
+	local start = RazorInput:device()
+	assert(
+		start == "KeyboardMouse" or start == "Touch" or start == "Gamepad",
+		"device() should be one of the three devices"
+	)
+
+	local changes: { string } = {}
+	local connection = RazorInput.deviceChanged:connect(function(newDevice: string)
+		table.insert(changes, newDevice)
+	end)
+
+	RazorInput._updateDevice(Enum.UserInputType.Touch)
+	RazorInput._updateDevice(Enum.UserInputType.Touch)
+	RazorInput._updateDevice(Enum.UserInputType.Gamepad2)
+	RazorInput._updateDevice(Enum.UserInputType.Focus)
+	RazorInput._updateDevice(Enum.UserInputType.MouseMovement)
+	RazorInput._updateDevice(Enum.UserInputType.Keyboard)
+
+	local expected = if start == "Touch" then "Gamepad,KeyboardMouse" else "Touch,Gamepad,KeyboardMouse"
+	assert(
+		table.concat(changes, ",") == expected,
+		"deviceChanged should fire only on a change: " .. table.concat(changes, ",")
+	)
+	assert(RazorInput:device() == "KeyboardMouse", "device() should follow the last input")
+
+	connection:disconnect()
+	print("✅ Device detection passed")
+end
+
 function mod:start()
 	print("Starting RazorInput tests...")
 
@@ -649,6 +762,8 @@ function mod:start()
 		runKeyboardTests()
 		runTouchTests()
 		runLayoutTests()
+		runMouseTests()
+		runDeviceTests()
 	end)
 
 	if not success then

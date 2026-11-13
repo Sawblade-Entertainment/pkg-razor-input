@@ -67,7 +67,65 @@ Binds one or more keys (or touch buttons) to a specific action.
 - Invalid key names are skipped with a warning; the remaining keys still bind.
 
 #### `input(inp: InputObject, gameProcessed: boolean?)`
-The entry point for processing input. Call it from `UserInputService.InputBegan`, `InputChanged` and `InputEnded`. Touch inputs are routed to `RazorInput.Touch`; pass `gameProcessed` so gestures ignore touches on other UI.
+The entry point for processing input. Call it from `UserInputService.InputBegan`, `InputChanged` and `InputEnded`. Touch inputs are routed to `RazorInput.Touch` and mouse movement to [mouse looks](#mouse-look); pass `gameProcessed` so gestures ignore touches on other UI.
+
+#### `mouseLook(config?): MouseLook`
+A look source that reports mouse movement with the same `moved` signal as a touchpad. See [Mouse look](#mouse-look).
+
+#### `device(): "KeyboardMouse" | "Touch" | "Gamepad"` and `deviceChanged`
+The kind of input the player last used, and a signal fired with the new value when it changes. See [Device detection](#device-detection).
+
+## Mouse look
+
+`RazorInput.mouseLook()` turns mouse movement into a look source shaped exactly like a [touchpad](#touchtouchpadconfig): the same `moved(delta, position, active)` signal with `delta` in screen space (y down), and the same `action(active, Vector3.new(delta.X, -delta.Y, 0))` when bound. One camera handler then serves PC and mobile:
+
+```lua
+local function onLook(delta: Vector2, _position: Vector2, _active: boolean)
+    camera:rotate(delta)
+end
+
+RazorInput.mouseLook({ sensitivity = 0.3 }).moved:connect(onLook)
+RazorInput.Touch.touchpad({ name = "Look", sensitivity = 0.4 }).moved:connect(onLook)
+```
+
+Or bind both to one axis:
+
+```lua
+local mouse = RazorInput.mouseLook({ sensitivity = 0.3 })
+local pad = RazorInput.Touch.touchpad({ name = "Look" })
+
+RazorInput:bindAxis("Look", function(active, delta)
+    camera:rotate(Vector2.new(delta.X, -delta.Y))
+end, mouse, pad)
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `sensitivity` | `1` | Multiplier for the reported delta |
+| `button` | none | `"MouseButton1"`, `"MouseButton2"` or `"MouseButton3"`: only report movement while it is held (a right-drag camera). A press that lands on other UI (`gameProcessed`) doesn't start looking. |
+| `name` | `"MouseLook"` | Name for your own bookkeeping |
+
+- `look.active` — without `button`, `true` while enabled; with `button`, `true` while it is held.
+- When the button is released, or the look is disabled or destroyed, `moved` fires once more with a zero delta and `active = false`, like a touchpad when the finger lifts.
+- `look:setEnabled(enabled)` and `look:destroy()`.
+- Mouse movement only reaches the look through `RazorInput:input()` from `InputChanged`, so forward all three events.
+- The delta is the raw `InputObject.Delta`, which works whether or not the mouse is locked. Locking the cursor (`UserInputService.MouseBehavior`) stays up to your camera code.
+
+## Device detection
+
+```lua
+local function showPrompts(device)
+    -- "KeyboardMouse", "Touch" or "Gamepad"
+    hud:setPrompts(device)
+end
+
+showPrompts(RazorInput:device())
+RazorInput.deviceChanged:connect(showPrompts)
+```
+
+The device follows `UserInputService.LastInputTypeChanged`: touch is `"Touch"`, any gamepad is `"Gamepad"`, and keyboard, mouse and text input are `"KeyboardMouse"`. Inputs that don't say which device is in use (window focus, gyro, accelerometer) leave it unchanged. Before the first input it is guessed from the hardware: a touch screen without a mouse is `"Touch"`, a gamepad without a keyboard is `"Gamepad"`, anything else `"KeyboardMouse"`. `deviceChanged` fires only when the value changes.
+
+Touch controls decide their own visibility (see [Visibility](#visibility)); `device()` doesn't affect them.
 
 ## Layouts
 

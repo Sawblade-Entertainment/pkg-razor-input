@@ -2,10 +2,17 @@
 --!native
 --!optimize 2
 
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local MouseLook = require(script.MouseLook)
 local Signal = require(script.Signal)
 local Touch = require(script.Touch)
 
 export type Action = (pressed: boolean, value: Vector3) -> ()
+export type MouseLook = MouseLook.MouseLook
+-- The kind of input the player last used.
+export type Device = "KeyboardMouse" | "Touch" | "Gamepad"
 -- A key name ("Space", "ButtonA") or an axis from createAxis.
 export type KeySpec = string | { string }
 export type Placement = Touch.Placement
@@ -41,11 +48,60 @@ InputController.Touch = Touch
 -- Fires with the layout name after setLayout switches layouts.
 InputController.layoutChanged = Signal.new() :: Signal.Signal<string>
 
+-- Fires with the new device when the player switches between keyboard and
+-- mouse, touch and gamepad.
+InputController.deviceChanged = Signal.new() :: Signal.Signal<Device>
+
 local InputBinds: { [Enum.KeyCode]: Action } = {}
 
 local named: { [string]: Named } = {}
 local layouts: { [string]: Layout } = {}
 local current = DEFAULT
+
+local looks: { MouseLook } = {}
+
+local KEYBOARD_MOUSE: { [Enum.UserInputType]: true } = {
+	[Enum.UserInputType.Keyboard] = true,
+	[Enum.UserInputType.TextInput] = true,
+	[Enum.UserInputType.MouseMovement] = true,
+	[Enum.UserInputType.MouseButton1] = true,
+	[Enum.UserInputType.MouseButton2] = true,
+	[Enum.UserInputType.MouseButton3] = true,
+	[Enum.UserInputType.MouseWheel] = true,
+}
+
+-- Inputs that say nothing about the device (Focus, Gyro, None...) map to nil.
+local function deviceFor(inputType: Enum.UserInputType): Device?
+	if inputType == Enum.UserInputType.Touch then
+		return "Touch"
+	elseif KEYBOARD_MOUSE[inputType] then
+		return "KeyboardMouse"
+	elseif string.sub(inputType.Name, 1, 7) == "Gamepad" then
+		return "Gamepad"
+	end
+
+	return nil
+end
+
+-- Before the first input, guess from what the device has.
+local function initialDevice(): Device
+	if RunService:IsClient() then
+		local fromLast: Device? = deviceFor(UserInputService:GetLastInputType())
+		if fromLast then
+			return fromLast
+		end
+	end
+
+	if UserInputService.TouchEnabled and not UserInputService.MouseEnabled then
+		return "Touch"
+	elseif UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
+		return "Gamepad"
+	end
+
+	return "KeyboardMouse"
+end
+
+local device: Device = initialDevice()
 
 local function keyCode(name: string): Enum.KeyCode?
 	local code = Enum.KeyCode:FromName(name)
@@ -381,12 +437,61 @@ function InputController:getLayout(name: string?): Layout?
 	return cloneLayout({ keys = keys, touch = touch })
 end
 
+-- A look source that reports mouse movement through `moved`, with the same
+-- arguments as a touchpad. Can be passed to bindAxis like a touch control.
+function InputController.mouseLook(config: MouseLook.Config?): MouseLook
+	local look = MouseLook.new(config or {})
+	table.insert(looks, look)
+	return look
+end
+
+-- The kind of input the player last used: "KeyboardMouse", "Touch" or "Gamepad".
+function InputController:device(): Device
+	return device
+end
+
+-- Internal: update the device from a LastInputType (exposed for tests).
+function InputController._updateDevice(inputType: Enum.UserInputType)
+	local newDevice: Device? = deviceFor(inputType)
+	if newDevice and newDevice ~= device then
+		device = newDevice
+		InputController.deviceChanged:fire(newDevice)
+	end
+end
+
+if RunService:IsClient() then
+	UserInputService.LastInputTypeChanged:Connect(InputController._updateDevice)
+end
+
 -- Call from InputBegan, InputChanged and InputEnded. Pass gameProcessed so
 -- gestures ignore touches that land on other UI.
 function InputController:input(inp: InputObject, gameProcessed: boolean?)
-	if inp.UserInputType == Enum.UserInputType.Touch then
+	local inputType = inp.UserInputType
+
+	if inputType == Enum.UserInputType.Touch then
 		Touch.process(inp, gameProcessed)
 		return
+	end
+
+	if
+		inputType == Enum.UserInputType.MouseMovement
+		or inputType == Enum.UserInputType.MouseButton1
+		or inputType == Enum.UserInputType.MouseButton2
+		or inputType == Enum.UserInputType.MouseButton3
+	then
+		for index = #looks, 1, -1 do
+			local look = looks[index]
+
+			if look.destroyed then
+				table.remove(looks, index)
+			else
+				look:_process(inp, gameProcessed)
+			end
+		end
+
+		if inputType == Enum.UserInputType.MouseMovement then
+			return
+		end
 	end
 
 	if InputBinds[inp.KeyCode] then

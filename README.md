@@ -1,5 +1,5 @@
 # Razor Input
-Dead simple input handling
+Dead simple input handling, including mobile controls (thumbsticks, buttons, toggles, touchpads and gestures)
 [Documentation](https://sawblade-entertainment.github.io/pkg-razor-input/)
 
 Download with chainlink (or wally):

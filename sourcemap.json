@@ -22,6 +22,59 @@
               "className": "ModuleScript",
               "filePaths": [
                 "src/init.luau"
+              ],
+              "children": [
+                {
+                  "name": "Signal",
+                  "className": "ModuleScript",
+                  "filePaths": [
+                    "src/Signal.luau"
+                  ]
+                },
+                {
+                  "name": "Touch",
+                  "className": "ModuleScript",
+                  "filePaths": [
+                    "src/Touch/init.luau"
+                  ],
+                  "children": [
+                    {
+                      "name": "Button",
+                      "className": "ModuleScript",
+                      "filePaths": [
+                        "src/Touch/Button.luau"
+                      ]
+                    },
+                    {
+                      "name": "Gestures",
+                      "className": "ModuleScript",
+                      "filePaths": [
+                        "src/Touch/Gestures.luau"
+                      ]
+                    },
+                    {
+                      "name": "Thumbstick",
+                      "className": "ModuleScript",
+                      "filePaths": [
+                        "src/Touch/Thumbstick.luau"
+                      ]
+                    },
+                    {
+                      "name": "Touchpad",
+                      "className": "ModuleScript",
+                      "filePaths": [
+                        "src/Touch/Touchpad.luau"
+                      ]
+                    },
+                    {
+                      "name": "Util",
+                      "className": "ModuleScript",
+                      "filePaths": [
+                        "src/Touch/Util.luau"
+                      ]
+                    }
+                  ]
+                }
               ]
             }
           ]

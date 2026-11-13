@@ -25,6 +25,10 @@ export type Layout = {
 
 type Kind = "action" | "axis"
 
+-- What a key name binds to: a KeyCode, a mouse button (UserInputType) or a
+-- mouse wheel name ("MouseWheel", "MouseWheelUp", "MouseWheelDown").
+type InputId = Enum.KeyCode | Enum.UserInputType | string
+
 -- A bind created with a name, so layouts can change its keys.
 type Named = {
 	kind: Kind,
@@ -33,7 +37,7 @@ type Named = {
 	keys: { KeySpec },
 	controls: { any },
 	-- Handlers currently in InputBinds.
-	codes: { [Enum.KeyCode]: Action },
+	codes: { [InputId]: Action },
 	-- Releases any key still held under the current handlers.
 	release: () -> (),
 }
@@ -52,7 +56,7 @@ InputController.layoutChanged = Signal.new() :: Signal.Signal<string>
 -- mouse, touch and gamepad.
 InputController.deviceChanged = Signal.new() :: Signal.Signal<Device>
 
-local InputBinds: { [Enum.KeyCode]: Action } = {}
+local InputBinds: { [InputId]: Action } = {}
 
 local named: { [string]: Named } = {}
 local layouts: { [string]: Layout } = {}
@@ -103,21 +107,40 @@ end
 
 local device: Device = initialDevice()
 
-local function keyCode(name: string): Enum.KeyCode?
+-- Mouse inputs by name. Roblox reports mouse buttons by UserInputType (their
+-- KeyCode is Unknown), so they can't be found through Enum.KeyCode.
+local MOUSE_INPUTS: { [string]: InputId } = {
+	MouseButton1 = Enum.UserInputType.MouseButton1,
+	MouseButton2 = Enum.UserInputType.MouseButton2,
+	MouseButton3 = Enum.UserInputType.MouseButton3,
+	MouseLeftButton = Enum.UserInputType.MouseButton1,
+	MouseRightButton = Enum.UserInputType.MouseButton2,
+	MouseMiddleButton = Enum.UserInputType.MouseButton3,
+	MouseWheel = "MouseWheel",
+	MouseWheelUp = "MouseWheelUp",
+	MouseWheelDown = "MouseWheelDown",
+}
+
+local function inputId(name: string): InputId?
+	local mouse = MOUSE_INPUTS[name]
+	if mouse then
+		return mouse
+	end
+
 	local code = Enum.KeyCode:FromName(name)
 
 	if not code then
-		warn(name .. " is not a valid KeyCode name")
+		warn(name .. " is not a valid KeyCode or mouse input name")
 	end
 
 	return code
 end
 
--- Build key handlers for `keys`. Returns them by KeyCode, plus a function
+-- Build key handlers for `keys`. Returns them by input, plus a function
 -- that releases whatever is still held through them.
-local function buildHandlers(kind: Kind, action: Action, keys: { KeySpec }): ({ [Enum.KeyCode]: Action }, () -> ())
-	local handlers: { [Enum.KeyCode]: Action } = {}
-	local held: { [Enum.KeyCode]: boolean } = {}
+local function buildHandlers(kind: Kind, action: Action, keys: { KeySpec }): ({ [InputId]: Action }, () -> ())
+	local handlers: { [InputId]: Action } = {}
+	local held: { [InputId]: boolean } = {}
 	local axes: { { number } } = {}
 
 	for _, spec in keys do
@@ -132,7 +155,7 @@ local function buildHandlers(kind: Kind, action: Action, keys: { KeySpec }): ({ 
 
 			for i = 1, 4 do
 				local name = spec[i]
-				local code = if type(name) == "string" then keyCode(name) else nil
+				local code = if type(name) == "string" then inputId(name) else nil
 				if not code then
 					continue
 				end
@@ -144,7 +167,7 @@ local function buildHandlers(kind: Kind, action: Action, keys: { KeySpec }): ({ 
 				end
 			end
 		elseif type(spec) == "string" then
-			local code = keyCode(spec)
+			local code = inputId(spec)
 			if not code then
 				continue
 			end
@@ -463,8 +486,22 @@ if RunService:IsClient() then
 	UserInputService.LastInputTypeChanged:Connect(InputController._updateDevice)
 end
 
+-- Mouse buttons whose press reached the binds, so a release only follows a
+-- delivered press.
+local mouseHeld: { [Enum.UserInputType]: boolean } = {}
+
+-- The wheel has no held state: each scroll step presses and releases at once.
+local function tap(id: InputId, value: Vector3)
+	local handler = InputBinds[id]
+	if handler then
+		handler(true, value)
+		handler(false, Vector3.zero)
+	end
+end
+
 -- Call from InputBegan, InputChanged and InputEnded. Pass gameProcessed so
--- gestures ignore touches that land on other UI.
+-- gestures ignore touches that land on other UI, and clicks or scrolling on
+-- other UI don't reach mouse binds.
 function InputController:input(inp: InputObject, gameProcessed: boolean?)
 	local inputType = inp.UserInputType
 
@@ -492,6 +529,43 @@ function InputController:input(inp: InputObject, gameProcessed: boolean?)
 		if inputType == Enum.UserInputType.MouseMovement then
 			return
 		end
+
+		local handler = InputBinds[inputType]
+		local state = inp.UserInputState
+
+		if state == Enum.UserInputState.Begin then
+			-- A click on other UI doesn't press the bind.
+			if not gameProcessed then
+				mouseHeld[inputType] = true
+
+				if handler then
+					handler(true, inp.Position)
+				end
+			end
+		elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+			-- Only release presses that were delivered.
+			if mouseHeld[inputType] then
+				mouseHeld[inputType] = nil
+
+				if handler then
+					handler(false, inp.Position)
+				end
+			end
+		end
+
+		return
+	end
+
+	if inputType == Enum.UserInputType.MouseWheel then
+		local scroll = inp.Position.Z
+		if gameProcessed or scroll == 0 then
+			return
+		end
+
+		local value = Vector3.new(0, scroll, 0)
+		tap("MouseWheel", value)
+		tap(if scroll > 0 then "MouseWheelUp" else "MouseWheelDown", value)
+		return
 	end
 
 	if InputBinds[inp.KeyCode] then

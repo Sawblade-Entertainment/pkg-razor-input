@@ -64,10 +64,38 @@ Binds one or more inputs to an axis action.
 #### `bindAction(action: (pressed: boolean, position: Vector3?) -> (), ...: string | Control)`
 Binds one or more keys (or touch buttons) to a specific action.
 - **action**: A callback function receiving `pressed` (boolean) and the input `position` (Vector3).
+- Key names are `Enum.KeyCode` names (`"Space"`, `"ButtonR2"`) or [mouse input names](#mouse-buttons-and-wheel).
 - Invalid key names are skipped with a warning; the remaining keys still bind.
 
 #### `input(inp: InputObject, gameProcessed: boolean?)`
-The entry point for processing input. Call it from `UserInputService.InputBegan`, `InputChanged` and `InputEnded`. Touch inputs are routed to `RazorInput.Touch` and mouse movement to [mouse looks](#mouse-look); pass `gameProcessed` so gestures ignore touches on other UI.
+The entry point for processing input. Call it from `UserInputService.InputBegan`, `InputChanged` and `InputEnded`. Touch inputs are routed to `RazorInput.Touch` and mouse movement to [mouse looks](#mouse-look). Pass `gameProcessed` so gestures ignore touches on other UI, and clicks or scrolling over other UI don't reach mouse binds.
+
+### Mouse buttons and wheel
+
+Mouse buttons and the scroll wheel bind by name wherever a key name goes: `bindAction`, `bindAxis`, `createAxis` and a layout's `keys`.
+
+```lua
+RazorInput:bindAction("Fire", onFire, "MouseButton1", "ButtonR2")
+RazorInput:bindAction("Aim", onAim, "MouseButton2", "ButtonL2")
+
+RazorInput:bindAxis("Zoom", function(pressed, value)
+    if pressed then
+        camera:zoom(value.Y) -- +1 scrolling up, -1 scrolling down
+    end
+end, "MouseWheel")
+
+RazorInput:bindAction("NextWeapon", onNext, "MouseWheelUp", "ButtonR1")
+```
+
+| Name | Behaves like |
+|---|---|
+| `MouseButton1`, `MouseButton2`, `MouseButton3` | A key: `action(true, position)` on press, `action(false, position)` on release. `MouseLeftButton`, `MouseRightButton` and `MouseMiddleButton` also work. |
+| `MouseWheel` | A tap on every scroll step: `action(true, Vector3.new(0, scroll, 0))` then `action(false, Vector3.zero)`. `scroll` is positive scrolling up. |
+| `MouseWheelUp`, `MouseWheelDown` | A tap on each step in that direction, with the same value as `MouseWheel`. |
+
+- A press that lands on other UI (`gameProcessed`) is ignored, and so is its release. Scrolling over UI (a `ScrollingFrame`, say) is ignored too.
+- Wheel names fit in axes: `createAxis("MouseWheelUp", "MouseWheelDown", "Z", "X")` gives `y = 1` or `-1` for one step, then `0`.
+- Mouse buttons still reach any [mouse look](#mouse-look) whose `button` they match, as well as their bind.
 
 #### `mouseLook(config?): MouseLook`
 A look source that reports mouse movement with the same `moved` signal as a touchpad. See [Mouse look](#mouse-look).

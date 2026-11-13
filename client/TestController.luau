@@ -725,6 +725,99 @@ local function runMouseTests()
 	print("✅ Mouse look (hold button) passed")
 end
 
+local function wheel(scroll: number, gameProcessed: boolean?)
+	local input = mockMouse(Enum.UserInputType.MouseWheel, Enum.UserInputState.Change)
+	input.Position = Vector3.new(400, 300, scroll)
+	RazorInput:input(input, gameProcessed)
+end
+
+local function runMouseInputTests()
+	local function click(inputType: Enum.UserInputType, state: Enum.UserInputState, gameProcessed: boolean?)
+		RazorInput:input(mockMouse(inputType, state), gameProcessed)
+	end
+
+	-- Mouse buttons bind by name, like keys.
+	local fireLog: { boolean } = {}
+	RazorInput:bindAction("MouseFire", function(pressed: boolean, position: Vector3)
+		table.insert(fireLog, pressed)
+		assert(near(position, Vector3.new(400, 300, 0)), "Mouse buttons should pass the cursor position")
+	end, "MouseButton1")
+
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.Begin)
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.End)
+	assert(joined(fireLog) == "true,false", "MouseButton1 should press and release")
+
+	-- A click on other UI is ignored, release included.
+	table.clear(fireLog)
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.Begin, true)
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.End)
+	assert(#fireLog == 0, "A gameProcessed click should not reach the bind")
+
+	-- Roblox's KeyCode names for the buttons work too, and buttons fit in axes.
+	local aimLog: { boolean } = {}
+	RazorInput:bindAction("MouseAim", function(pressed: boolean)
+		table.insert(aimLog, pressed)
+	end, "MouseRightButton")
+	click(Enum.UserInputType.MouseButton2, Enum.UserInputState.Begin)
+	click(Enum.UserInputType.MouseButton2, Enum.UserInputState.End)
+	assert(joined(aimLog) == "true,false", "MouseRightButton should bind MouseButton2")
+
+	-- Layouts can move a bind onto a mouse button.
+	RazorInput:createLayout("MouseLayout", { keys = { MouseFire = { "MouseButton3" } } })
+	RazorInput:setLayout("MouseLayout")
+	table.clear(fireLog)
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.Begin)
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.End)
+	assert(#fireLog == 0, "The layout should take MouseButton1 away")
+	click(Enum.UserInputType.MouseButton3, Enum.UserInputState.Begin)
+	click(Enum.UserInputType.MouseButton3, Enum.UserInputState.End)
+	assert(joined(fireLog) == "true,false", "The layout should bind MouseButton3")
+	RazorInput:setLayout("Default")
+	RazorInput:removeLayout("MouseLayout")
+	print("✅ Mouse buttons passed")
+
+	-- The wheel: MouseWheel reports the scroll, Up/Down are taps.
+	local zoom: { number } = {}
+	RazorInput:bindAxis("MouseZoom", function(pressed: boolean, value: Vector3)
+		if pressed then
+			table.insert(zoom, value.Y)
+		end
+	end, "MouseWheel")
+
+	local upLog: { boolean } = {}
+	RazorInput:bindAction("MouseNext", function(pressed: boolean)
+		table.insert(upLog, pressed)
+	end, "MouseWheelUp")
+
+	wheel(1)
+	wheel(-1)
+	wheel(0)
+	wheel(1, true)
+	assert(joined(zoom) == "1,-1", "MouseWheel should report each scroll step")
+	assert(joined(upLog) == "true,false", "MouseWheelUp should tap once, only on scroll up")
+
+	-- Inside an axis (this takes MouseWheelUp over from MouseNext).
+	local axisLog: { number } = {}
+	RazorInput:bindAxis("MouseWheelAxis", function(pressed: boolean, value: Vector3)
+		if pressed then
+			table.insert(axisLog, value.Y)
+		end
+	end, RazorInput.createAxis("MouseWheelUp", "MouseWheelDown", "Z", "X"))
+	wheel(1)
+	wheel(-1)
+	assert(joined(axisLog) == "1,-1", "Wheel names should work inside axes")
+	print("✅ Mouse wheel passed")
+
+	for _, name in { "MouseFire", "MouseAim", "MouseZoom", "MouseNext", "MouseWheelAxis" } do
+		RazorInput:unbind(name)
+	end
+
+	table.clear(fireLog)
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.Begin)
+	click(Enum.UserInputType.MouseButton1, Enum.UserInputState.End)
+	assert(#fireLog == 0, "unbind should detach mouse buttons")
+end
+
 local function runDeviceTests()
 	local start = RazorInput:device()
 	assert(
@@ -763,6 +856,7 @@ function mod:start()
 		runTouchTests()
 		runLayoutTests()
 		runMouseTests()
+		runMouseInputTests()
 		runDeviceTests()
 	end)
 

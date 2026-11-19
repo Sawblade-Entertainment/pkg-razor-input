@@ -7,7 +7,7 @@ Dead simple input handling for Roblox.
 Install via Wally:
 
 ```toml
-RazorInput = "vibeonline/razorinput@0.1.6"
+RazorInput = "vibeonline/razorinput@0.1.7"
 ```
 
 ## Quick Start

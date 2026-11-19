@@ -7,7 +7,7 @@ Dead simple input handling for Roblox.
 Install via Wally:
 
 ```toml
-RazorInput = "vibeonline/razorinput@0.1.6"
+RazorInput = "vibeonline/razorinput@0.1.7"
 ```
 
 ## Quick Start
@@ -64,7 +64,7 @@ Binds one or more inputs to an axis action.
 #### `bindAction(action: (pressed: boolean, position: Vector3?) -> (), ...: string | Control)`
 Binds one or more keys (or touch buttons) to a specific action.
 - **action**: A callback function receiving `pressed` (boolean) and the input `position` (Vector3).
-- Key names are `Enum.KeyCode` names (`"Space"`, `"ButtonR2"`) or [mouse input names](#mouse-buttons-and-wheel).
+- Key names are `Enum.KeyCode` names (`"Space"`, `"ButtonR2"`), [mouse input names](#mouse-buttons-and-wheel) or [VR controller names](#controller-buttons-and-sticks).
 - Invalid key names are skipped with a warning; the remaining keys still bind.
 
 #### `input(inp: InputObject, gameProcessed: boolean?)`
@@ -100,8 +100,14 @@ RazorInput:bindAction("NextWeapon", onNext, "MouseWheelUp", "ButtonR1")
 #### `mouseLook(config?): MouseLook`
 A look source that reports mouse movement with the same `moved` signal as a touchpad. See [Mouse look](#mouse-look).
 
-#### `device(): "KeyboardMouse" | "Touch" | "Gamepad"` and `deviceChanged`
-The kind of input the player last used, and a signal fired with the new value when it changes. See [Device detection](#device-detection).
+#### `device(): "KeyboardMouse" | "Touch" | "Gamepad" | "VR"` and `deviceChanged`
+The kind of input the player last used (or `"VR"` while a headset is in use), and a signal fired with the new value when it changes. See [Device detection](#device-detection).
+
+#### `VR`
+Head and hand poses, pointer rays, haptics and recentering. See [VR headsets and controllers](#vr-headsets-and-controllers).
+
+#### `Haptics`
+Vibration on phones, gamepads and VR controllers. See [Haptics and vibration](#haptics-and-vibration).
 
 ## Mouse look
 
@@ -143,7 +149,7 @@ end, mouse, pad)
 
 ```lua
 local function showPrompts(device)
-    -- "KeyboardMouse", "Touch" or "Gamepad"
+    -- "KeyboardMouse", "Touch", "Gamepad" or "VR"
     hud:setPrompts(device)
 end
 
@@ -152,6 +158,8 @@ RazorInput.deviceChanged:connect(showPrompts)
 ```
 
 The device follows `UserInputService.LastInputTypeChanged`: touch is `"Touch"`, any gamepad is `"Gamepad"`, and keyboard, mouse and text input are `"KeyboardMouse"`. Inputs that don't say which device is in use (window focus, gyro, accelerometer) leave it unchanged. Before the first input it is guessed from the hardware: a touch screen without a mouse is `"Touch"`, a gamepad without a keyboard is `"Gamepad"`, anything else `"KeyboardMouse"`. `deviceChanged` fires only when the value changes.
+
+While a VR headset is in use (`VRService.VREnabled`), the device is `"VR"` whatever else the player presses: VR controllers report as a gamepad, and a PC VR player may still touch the keyboard. When the headset goes away, the device returns to the last non-VR input used.
 
 Touch controls decide their own visibility (see [Visibility](#visibility)); `device()` doesn't affect them.
 
@@ -276,7 +284,7 @@ Controls sink input, so the default camera doesn't rotate when a finger is on th
 
 | Function | Description |
 |---|---|
-| `Touch.setVisibility(mode)` | `"auto"` (default) shows controls while the player is using touch; `"always"` / `"never"` force it. Hiding releases every held control. |
+| `Touch.setVisibility(mode)` | `"auto"` (default) shows controls while the player is using touch, and never in VR; `"always"` / `"never"` force it. Hiding releases every held control. |
 | `Touch.isVisible()` | Whether the controls are currently shown. |
 | `Touch.setDefaultControlsEnabled(enabled)` | Show or hide Roblox's built-in touch thumbstick and jump button. |
 | `Touch.gui()` | The `RazorTouch` ScreenGui the controls live in (created on first use). |
@@ -405,3 +413,134 @@ Images are scaled to fit the control's square size, so square art works best. Hi
 ### Signals
 
 Every signal has `connect(fn)` and `once(fn)`, which return a connection with `disconnect()`. Listeners run in their own thread, so an error in one won't break input handling.
+
+## Haptics and vibration
+
+`RazorInput.Haptics` vibrates whatever the player is holding: a phone, a gamepad or a standalone VR controller. It's built on Roblox's `HapticEffect`, which plays on the input device in use, so the same call works everywhere. Keyboard and mouse just don't vibrate.
+
+```lua
+local Haptics = RazorInput.Haptics
+
+-- A short buzz
+Haptics.pulse(0.6, 0.08)
+
+-- Roblox's predefined effects
+Haptics.play("UIClick")
+Haptics.play("GameplayExplosion")
+
+-- One side of the device: a VR hand, or one side of a gamepad
+Haptics.pulse(1, 0.1, "Right")
+
+-- A rumble that follows the trigger: each pulse replaces the last
+RazorInput:bindAction("Throttle", function(pressed, value)
+    if pressed then
+        Haptics.pulse(value.Z, 10)
+    else
+        Haptics.stop()
+    end
+end, "ButtonR2")
+
+-- A custom curve: Time in milliseconds, Value from 0 to 1
+Haptics.waveform({
+    FloatCurveKey.new(0, 0.2, Enum.KeyInterpolationMode.Linear),
+    FloatCurveKey.new(300, 1, Enum.KeyInterpolationMode.Linear),
+})
+```
+
+| Function | Description |
+|---|---|
+| `Haptics.pulse(strength?, duration?, side?)` | Vibrate at `strength` (0 to 1, default `1`) for `duration` seconds (default `0.1`). A newer pulse or waveform on the same side replaces it, so calling it as a value changes gives a rumble that follows the value. |
+| `Haptics.play(preset, side?)` | Play a predefined effect: `"UIHover"`, `"UIClick"`, `"UINotification"`, `"GameplayExplosion"` or `"GameplayCollision"`. Playing one again restarts it. |
+| `Haptics.waveform(keys, side?)` | Play a custom curve of `FloatCurveKey`s, with `Time` in milliseconds and `Value` from 0 to 1 (clamped). Replaces the pulse on that side. |
+| `Haptics.stop(side?)` | Stop what's playing on one side, or everything. |
+| `Haptics.setEnabled(enabled)`, `Haptics.isEnabled()` | Turn all haptics off (for a settings toggle) or back on. Turning off stops what's playing, and calls do nothing while off. |
+
+`side` is `"Both"` (the default: the whole device), `"Left"` or `"Right"`. In VR it picks a controller; on a gamepad it leans toward that side. A phone usually has a single motor, so sides feel the same there.
+
+- Haptics only play on the client. Calls on the server do nothing.
+- Effects are made once in a `RazorHaptics` folder in `Workspace` and replayed, so nothing piles up.
+- Where Roblox doesn't support haptics, calls do nothing. At launch that was PC VR (a headset linked to a PC), Android 11 and below, controllers on macOS 15 and later, and controllers connected to phones.
+- Roblox's `HapticService` is deprecated, so the package doesn't use it.
+
+## VR headsets and controllers
+
+VR controllers report to Roblox as `Gamepad1`, so their buttons and sticks bind like any other key. `RazorInput.VR` covers what keys can't: where the head and hands are, pointing, haptics and recentering.
+
+```lua
+local VR = RazorInput.VR
+
+-- Buttons and sticks bind by name
+RazorInput:bindAction("Fire", function(pressed, value)
+    print("Fire", pressed, value.Z) -- Z is how far the trigger is pulled
+end, "MouseButton1", "VRRightTrigger")
+
+RazorInput:bindAxis("Move", function(active, direction)
+    print("Move", direction)
+end, RazorInput.createAxis("W", "S", "A", "D"), "VRLeftStick")
+
+-- Hands and head in world space
+local right = VR.hand("Right")
+right.moved:connect(function(cframe, localCFrame, tracked)
+    gun:PivotTo(cframe)
+end)
+
+-- Aim with a ray from the controller
+local ray = VR.pointer("Right", 500)
+if ray then
+    local hit = workspace:Raycast(ray.Origin, ray.Direction)
+end
+
+-- Haptics
+VR.pulse("Right", 0.6, 0.08)
+```
+
+### Controller buttons and sticks
+
+These names work wherever a key name goes: `bindAction`, `bindAxis`, `createAxis` and a layout's `keys`. They're aliases for gamepad keys, so a gamepad's matching button fires them too.
+
+| Name | Key | Value passed |
+|---|---|---|
+| `VRLeftTrigger`, `VRRightTrigger` | `ButtonL2`, `ButtonR2` | Pull amount (0 to 1) in `Z` |
+| `VRLeftGrip`, `VRRightGrip` | `ButtonL1`, `ButtonR1` | |
+| `VRLeftStick`, `VRRightStick` | `Thumbstick1`, `Thumbstick2` | Stick direction in `X` and `Y` |
+| `VRLeftStickClick`, `VRRightStickClick` | `ButtonL3`, `ButtonR3` | |
+| `VRButtonA`, `VRButtonB` | `ButtonA`, `ButtonB` | Right controller |
+| `VRButtonX`, `VRButtonY` | `ButtonX`, `ButtonY` | Left controller |
+
+- A trigger counts as pressed from the moment Roblox reports it until it is released; check `value.Z` for an analog threshold.
+- A layout can move binds between hands: `createLayout("LeftHanded", { keys = { Fire = { "VRLeftTrigger" } } })`.
+- Roblox's own VR controls use the thumbsticks to move and turn. Turn them off if your game binds the sticks itself.
+- Headsets differ. If a button doesn't fire what you expect, print `input.KeyCode` from `InputBegan` on that headset.
+
+### Poses
+
+| Function | Description |
+|---|---|
+| `VR.hand("Left" \| "Right", config?)` | A pose source for one controller. |
+| `VR.head(config?)` | A pose source for the headset. |
+| `VR.pose(part)` | `(worldCFrame, tracked)` for `"Head"`, `"LeftHand"` or `"RightHand"` right now. |
+| `VR.localPose(part)` | `(cframe, tracked)` as `VRService` reports it: relative to the camera and unscaled. |
+| `VR.toWorld(localCFrame)` | Converts a local pose to world space. |
+| `VR.pointer(hand, length?)` | A `Ray` from the hand along where it points (`1000` studs by default), or `nil` while untracked. |
+
+A pose source updates every frame, right after the camera:
+
+- `source.moved(cframe, localCFrame, tracked)` fires whenever the pose changes. `cframe` is in world space.
+- `source.cframe`, `source.localCFrame` and `source.tracked` hold the latest values, if you'd rather read them in your own loop.
+- Passed to `bindAxis`, it calls `action(tracked, worldPosition)`.
+- When tracking is lost, VR ends, or the source is disabled or destroyed, `moved` fires once more with `tracked = false`.
+- `source:setEnabled(enabled)` and `source:destroy()`. `config.name` names it for your own bookkeeping (defaults to the part name).
+
+`VRService` reports poses relative to the camera, in real-world units. World space is `camera.CFrame * (pose.Rotation + pose.Position * camera.HeadScale)`, which is what `VR.toWorld` does.
+
+### Other functions
+
+| Function | Description |
+|---|---|
+| `VR.enabled()` | Whether the player is in VR. |
+| `VR.enabledChanged` | Fires with the new value when a headset is connected or disconnected. |
+| `VR.pulse(hand, strength?, duration?)` | Vibrate one controller. Shortcut for [`Haptics.pulse(strength, duration, hand)`](#haptics-and-vibration). |
+| `VR.stopHaptics(hand?)` | Stop vibrating one hand, or both. Shortcut for `Haptics.stop(hand)`. |
+| `VR.recenter()` | Make the headset's current position and facing the new center. |
+
+Mouse looks and touch controls do nothing useful in VR: the headset moves the camera, and touch controls hide automatically.

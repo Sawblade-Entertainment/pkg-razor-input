@@ -9,10 +9,10 @@
 -- bindAction/bindAxis like any key ("VRRightTrigger", "VRLeftStick"...).
 -- This module covers what keys can't: where the head and hands are.
 
-local HapticService = game:GetService("HapticService")
 local RunService = game:GetService("RunService")
 local VRService = game:GetService("VRService")
 
+local Haptics = require(script.Parent.Haptics)
 local Signal = require(script.Parent.Signal)
 
 export type Part = "Head" | "LeftHand" | "RightHand"
@@ -26,11 +26,6 @@ local USER_CFRAMES: { [Part]: Enum.UserCFrame } = {
 	Head = Enum.UserCFrame.Head,
 	LeftHand = Enum.UserCFrame.LeftHand,
 	RightHand = Enum.UserCFrame.RightHand,
-}
-
-local MOTORS: { [Hand]: Enum.VibrationMotor } = {
-	Left = Enum.VibrationMotor.LeftHand,
-	Right = Enum.VibrationMotor.RightHand,
 }
 
 local RENDER_STEP = "RazorInputVRPoses"
@@ -70,7 +65,6 @@ local poseOverrides: { [Part]: CFrame } = {}
 
 local poses: { Pose } = {}
 local stepping = false
-local pulseTokens: { [Hand]: number } = { Left = 0, Right = 0 }
 
 -- Whether the player is in VR.
 function VR.enabled(): boolean
@@ -161,47 +155,22 @@ function VR.pointer(hand: Hand, length: number?): Ray?
 	return Ray.new(cframe.Position, cframe.LookVector * (length or 1000))
 end
 
--- Vibrate a controller at `strength` (0 to 1, default 1) for `duration`
--- seconds (default 0.1). A newer pulse on the same hand replaces an older one.
+local function checkHand(hand: Hand?)
+	assert(hand == nil or hand == "Left" or hand == "Right", 'VR hand must be "Left" or "Right"')
+end
+
+-- Vibrate one controller at `strength` (0 to 1, default 1) for `duration`
+-- seconds (default 0.1). Shortcut for Haptics.pulse aimed at that hand.
 function VR.pulse(hand: Hand, strength: number?, duration: number?)
-	local motor = MOTORS[hand]
-	assert(motor, 'VR hand must be "Left" or "Right"')
-
-	pulseTokens[hand] += 1
-	local token = pulseTokens[hand]
-
-	if not HapticService:IsMotorSupported(Enum.UserInputType.Gamepad1, motor) then
-		return
-	end
-
-	HapticService:SetMotor(Enum.UserInputType.Gamepad1, motor, math.clamp(strength or 1, 0, 1))
-
-	task.delay(duration or 0.1, function()
-		if pulseTokens[hand] == token then
-			HapticService:SetMotor(Enum.UserInputType.Gamepad1, motor, 0)
-		end
-	end)
+	assert(hand ~= nil, 'VR.pulse needs a hand: "Left" or "Right"')
+	checkHand(hand)
+	Haptics.pulse(strength, duration, hand)
 end
 
-local function stopHand(hand: Hand)
-	local motor = MOTORS[hand]
-	assert(motor, 'VR hand must be "Left" or "Right"')
-
-	pulseTokens[hand] += 1
-
-	if HapticService:IsMotorSupported(Enum.UserInputType.Gamepad1, motor) then
-		HapticService:SetMotor(Enum.UserInputType.Gamepad1, motor, 0)
-	end
-end
-
--- Stop vibrating one hand, or both.
+-- Stop vibrating one hand, or both. Shortcut for Haptics.stop.
 function VR.stopHaptics(hand: Hand?)
-	if hand then
-		stopHand(hand)
-	else
-		stopHand("Left")
-		stopHand("Right")
-	end
+	checkHand(hand)
+	Haptics.stop(hand)
 end
 
 -- Make the headset's current position and facing the new center.

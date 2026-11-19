@@ -5,6 +5,7 @@
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
+local Haptics = require(script.Haptics)
 local MouseLook = require(script.MouseLook)
 local Signal = require(script.Signal)
 local Touch = require(script.Touch)
@@ -15,6 +16,8 @@ export type MouseLook = MouseLook.MouseLook
 -- The kind of input the player last used. "VR" while a headset is in use,
 -- whatever else they touch.
 export type Device = "KeyboardMouse" | "Touch" | "Gamepad" | "VR"
+export type HapticSide = Haptics.Side
+export type HapticPreset = Haptics.Preset
 export type VRHand = VR.Hand
 export type VRPart = VR.Part
 export type VRPose = VR.Pose
@@ -56,6 +59,9 @@ InputController.Touch = Touch
 
 -- VR headsets and controllers: head and hand poses, pointers and haptics.
 InputController.VR = VR
+
+-- Vibration on phones, gamepads and VR controllers.
+InputController.Haptics = Haptics
 
 -- Fires with the layout name after setLayout switches layouts.
 InputController.layoutChanged = Signal.new() :: Signal.Signal<string>

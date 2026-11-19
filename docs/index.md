@@ -104,7 +104,10 @@ A look source that reports mouse movement with the same `moved` signal as a touc
 The kind of input the player last used (or `"VR"` while a headset is in use), and a signal fired with the new value when it changes. See [Device detection](#device-detection).
 
 #### `VR`
-Head and hand poses, pointer rays, haptics and recentering. See [VR](#vr).
+Head and hand poses, pointer rays, haptics and recentering. See [VR headsets and controllers](#vr-headsets-and-controllers).
+
+#### `Haptics`
+Vibration on phones, gamepads and VR controllers. See [Haptics and vibration](#haptics-and-vibration).
 
 ## Mouse look
 
@@ -411,7 +414,55 @@ Images are scaled to fit the control's square size, so square art works best. Hi
 
 Every signal has `connect(fn)` and `once(fn)`, which return a connection with `disconnect()`. Listeners run in their own thread, so an error in one won't break input handling.
 
-## VR
+## Haptics and vibration
+
+`RazorInput.Haptics` vibrates whatever the player is holding: a phone, a gamepad or a standalone VR controller. It's built on Roblox's `HapticEffect`, which plays on the input device in use, so the same call works everywhere. Keyboard and mouse just don't vibrate.
+
+```lua
+local Haptics = RazorInput.Haptics
+
+-- A short buzz
+Haptics.pulse(0.6, 0.08)
+
+-- Roblox's predefined effects
+Haptics.play("UIClick")
+Haptics.play("GameplayExplosion")
+
+-- One side of the device: a VR hand, or one side of a gamepad
+Haptics.pulse(1, 0.1, "Right")
+
+-- A rumble that follows the trigger: each pulse replaces the last
+RazorInput:bindAction("Throttle", function(pressed, value)
+    if pressed then
+        Haptics.pulse(value.Z, 10)
+    else
+        Haptics.stop()
+    end
+end, "ButtonR2")
+
+-- A custom curve: Time in milliseconds, Value from 0 to 1
+Haptics.waveform({
+    FloatCurveKey.new(0, 0.2, Enum.KeyInterpolationMode.Linear),
+    FloatCurveKey.new(300, 1, Enum.KeyInterpolationMode.Linear),
+})
+```
+
+| Function | Description |
+|---|---|
+| `Haptics.pulse(strength?, duration?, side?)` | Vibrate at `strength` (0 to 1, default `1`) for `duration` seconds (default `0.1`). A newer pulse or waveform on the same side replaces it, so calling it as a value changes gives a rumble that follows the value. |
+| `Haptics.play(preset, side?)` | Play a predefined effect: `"UIHover"`, `"UIClick"`, `"UINotification"`, `"GameplayExplosion"` or `"GameplayCollision"`. Playing one again restarts it. |
+| `Haptics.waveform(keys, side?)` | Play a custom curve of `FloatCurveKey`s, with `Time` in milliseconds and `Value` from 0 to 1 (clamped). Replaces the pulse on that side. |
+| `Haptics.stop(side?)` | Stop what's playing on one side, or everything. |
+| `Haptics.setEnabled(enabled)`, `Haptics.isEnabled()` | Turn all haptics off (for a settings toggle) or back on. Turning off stops what's playing, and calls do nothing while off. |
+
+`side` is `"Both"` (the default: the whole device), `"Left"` or `"Right"`. In VR it picks a controller; on a gamepad it leans toward that side. A phone usually has a single motor, so sides feel the same there.
+
+- Haptics only play on the client. Calls on the server do nothing.
+- Effects are made once in a `RazorHaptics` folder in `Workspace` and replayed, so nothing piles up.
+- Where Roblox doesn't support haptics, calls do nothing. At launch that was PC VR (a headset linked to a PC), Android 11 and below, controllers on macOS 15 and later, and controllers connected to phones.
+- Roblox's `HapticService` is deprecated, so the package doesn't use it.
+
+## VR headsets and controllers
 
 VR controllers report to Roblox as `Gamepad1`, so their buttons and sticks bind like any other key. `RazorInput.VR` covers what keys can't: where the head and hands are, pointing, haptics and recentering.
 
@@ -488,8 +539,8 @@ A pose source updates every frame, right after the camera:
 |---|---|
 | `VR.enabled()` | Whether the player is in VR. |
 | `VR.enabledChanged` | Fires with the new value when a headset is connected or disconnected. |
-| `VR.pulse(hand, strength?, duration?)` | Vibrate a controller at `strength` (0 to 1, default `1`) for `duration` seconds (default `0.1`). A newer pulse on the same hand replaces an older one. Does nothing on controllers without hand motors. |
-| `VR.stopHaptics(hand?)` | Stop vibrating one hand, or both. |
+| `VR.pulse(hand, strength?, duration?)` | Vibrate one controller. Shortcut for [`Haptics.pulse(strength, duration, hand)`](#haptics-and-vibration). |
+| `VR.stopHaptics(hand?)` | Stop vibrating one hand, or both. Shortcut for `Haptics.stop(hand)`. |
 | `VR.recenter()` | Make the headset's current position and facing the new center. |
 
 Mouse looks and touch controls do nothing useful in VR: the headset moves the camera, and touch controls hide automatically.

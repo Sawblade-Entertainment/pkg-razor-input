@@ -1052,6 +1052,90 @@ local function runVRTests()
 	VR._setEnabled(nil)
 end
 
+local function runHapticsTests()
+	local Haptics = RazorInput.Haptics
+	Haptics.setEnabled(true)
+	assert(Haptics.isEnabled(), "Haptics should start enabled")
+
+	-- Pulses play a flat custom waveform on the whole device by default.
+	Haptics.pulse(0.5, 0.2)
+	local folder = workspace:FindFirstChild("RazorHaptics")
+	assert(folder, "Haptic effects should live in a RazorHaptics folder")
+
+	local both = folder:FindFirstChild("PulseBoth") :: HapticEffect
+	assert(both and both.Type == Enum.HapticEffectType.Custom, "pulse should play a custom effect")
+	assert(near(both.Position, Vector3.zero) and near(both.Radius, 3), "Both should cover the whole device")
+
+	local keys = both:GetWaveformKeys()
+	assert(near(keys[1].Value, 0.5) and near(keys[2].Value, 0.5), "pulse should hold its strength")
+	assert(near(keys[2].Time, 200), "pulse duration should be in milliseconds")
+	assert(near(keys[#keys].Value, 0), "pulse should end at zero")
+
+	-- Strength is clamped, and a newer pulse reuses the same effect.
+	local count = #folder:GetChildren()
+	Haptics.pulse(5)
+	keys = both:GetWaveformKeys()
+	assert(near(keys[1].Value, 1), "pulse strength should clamp to 1")
+	assert(near(keys[2].Time, 100), "pulse should default to 0.1 seconds")
+	assert(
+		folder:FindFirstChild("PulseBoth") == both and #folder:GetChildren() == count,
+		"pulse should reuse its effect"
+	)
+
+	-- Sides aim at one side of the device.
+	Haptics.pulse(1, 0.1, "Left")
+	Haptics.pulse(1, 0.1, "Right")
+	local left = folder:FindFirstChild("PulseLeft") :: HapticEffect
+	local right = folder:FindFirstChild("PulseRight") :: HapticEffect
+	assert(left and left.Position.X < 0 and left.Radius < 3, "Left should aim at the left side")
+	assert(right and right.Position.X > 0 and right.Radius < 3, "Right should aim at the right side")
+	assert(not pcall(Haptics.pulse, 1, 0.1, "Middle"), "pulse should reject an unknown side")
+
+	-- Waveforms replace the pulse on their side, with values clamped.
+	Haptics.waveform({
+		FloatCurveKey.new(0, 0.2, Enum.KeyInterpolationMode.Linear),
+		FloatCurveKey.new(300, 1.5, Enum.KeyInterpolationMode.Linear),
+	}, "Right")
+	keys = right:GetWaveformKeys()
+	assert(#keys == 2 and near(keys[1].Value, 0.2) and near(keys[2].Value, 1), "waveform should play its keys, clamped")
+	assert(near(keys[2].Time, 300), "waveform times should be kept")
+	assert(not pcall(Haptics.waveform, {}), "waveform should reject an empty curve")
+
+	-- Presets get one effect each per side.
+	Haptics.play("UIClick")
+	local click = folder:FindFirstChild("UIClickBoth") :: HapticEffect
+	assert(click and click.Type == Enum.HapticEffectType.UIClick, "play should use the preset's effect type")
+	Haptics.play("GameplayExplosion", "Left")
+	local explosion = folder:FindFirstChild("GameplayExplosionLeft") :: HapticEffect
+	assert(explosion and explosion.Position.X < 0, "Presets should aim at their side")
+	count = #folder:GetChildren()
+	Haptics.play("UIClick")
+	assert(#folder:GetChildren() == count, "Replaying a preset should reuse its effect")
+	assert(not pcall(Haptics.play, "Rumble"), "play should reject an unknown preset")
+
+	-- VR.pulse is a shortcut aimed at one hand.
+	RazorInput.VR.pulse("Left", 0.4, 0.05)
+	keys = left:GetWaveformKeys()
+	assert(near(keys[1].Value, 0.4) and near(keys[2].Time, 50), "VR.pulse should pulse that hand's side")
+	assert(not pcall(RazorInput.VR.pulse, "Both"), "VR.pulse should only take a hand")
+
+	-- Turned off, calls do nothing.
+	Haptics.pulse(0.3)
+	Haptics.setEnabled(false)
+	assert(not Haptics.isEnabled(), "setEnabled(false) should turn haptics off")
+	Haptics.pulse(0.7)
+	Haptics.play("UINotification")
+	keys = both:GetWaveformKeys()
+	assert(near(keys[1].Value, 0.3), "A pulse while off should not play")
+	assert(folder:FindFirstChild("UINotificationBoth") == nil, "A preset while off should not play")
+	Haptics.setEnabled(true)
+
+	Haptics.stop("Left")
+	Haptics.stop()
+	assert(not pcall(Haptics.stop, "Middle"), "stop should reject an unknown side")
+	print("✅ Haptics passed")
+end
+
 function mod:start()
 	print("Starting RazorInput tests...")
 
@@ -1063,6 +1147,7 @@ function mod:start()
 		runMouseInputTests()
 		runDeviceTests()
 		runVRTests()
+		runHapticsTests()
 	end)
 
 	if not success then

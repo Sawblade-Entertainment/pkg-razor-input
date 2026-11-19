@@ -25,6 +25,13 @@
               ],
               "children": [
                 {
+                  "name": "Haptics",
+                  "className": "ModuleScript",
+                  "filePaths": [
+                    "src/Haptics.luau"
+                  ]
+                },
+                {
                   "name": "MouseLook",
                   "className": "ModuleScript",
                   "filePaths": [

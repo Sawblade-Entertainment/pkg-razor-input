@@ -8,11 +8,16 @@ local UserInputService = game:GetService("UserInputService")
 local MouseLook = require(script.MouseLook)
 local Signal = require(script.Signal)
 local Touch = require(script.Touch)
+local VR = require(script.VR)
 
 export type Action = (pressed: boolean, value: Vector3) -> ()
 export type MouseLook = MouseLook.MouseLook
--- The kind of input the player last used.
-export type Device = "KeyboardMouse" | "Touch" | "Gamepad"
+-- The kind of input the player last used. "VR" while a headset is in use,
+-- whatever else they touch.
+export type Device = "KeyboardMouse" | "Touch" | "Gamepad" | "VR"
+export type VRHand = VR.Hand
+export type VRPart = VR.Part
+export type VRPose = VR.Pose
 -- A key name ("Space", "ButtonA") or an axis from createAxis.
 export type KeySpec = string | { string }
 export type Placement = Touch.Placement
@@ -49,11 +54,14 @@ local InputController = {}
 -- Mobile controls: thumbsticks, buttons, toggles, touchpads and gestures.
 InputController.Touch = Touch
 
+-- VR headsets and controllers: head and hand poses, pointers and haptics.
+InputController.VR = VR
+
 -- Fires with the layout name after setLayout switches layouts.
 InputController.layoutChanged = Signal.new() :: Signal.Signal<string>
 
 -- Fires with the new device when the player switches between keyboard and
--- mouse, touch and gamepad.
+-- mouse, touch and gamepad, or puts on or takes off a VR headset.
 InputController.deviceChanged = Signal.new() :: Signal.Signal<Device>
 
 local InputBinds: { [InputId]: Action } = {}
@@ -87,8 +95,9 @@ local function deviceFor(inputType: Enum.UserInputType): Device?
 	return nil
 end
 
--- Before the first input, guess from what the device has.
-local function initialDevice(): Device
+-- Before the first input, guess from what the device has. Ignores VR: this
+-- is the device to fall back to when VR ends.
+local function flatDevice(): Device
 	if RunService:IsClient() then
 		local fromLast: Device? = deviceFor(UserInputService:GetLastInputType())
 		if fromLast then
@@ -105,7 +114,10 @@ local function initialDevice(): Device
 	return "KeyboardMouse"
 end
 
-local device: Device = initialDevice()
+-- The last non-VR device, kept up to date while in VR so leaving VR returns
+-- to whatever the player last used.
+local lastFlat: Device = flatDevice()
+local device: Device = if VR.enabled() then "VR" else lastFlat
 
 -- Mouse inputs by name. Roblox reports mouse buttons by UserInputType (their
 -- KeyCode is Unknown), so they can't be found through Enum.KeyCode.
@@ -121,10 +133,32 @@ local MOUSE_INPUTS: { [string]: InputId } = {
 	MouseWheelDown = "MouseWheelDown",
 }
 
+-- VR controller names. Controllers report as Gamepad1, so these are aliases
+-- for gamepad keys and fire for a gamepad's matching button too.
+local VR_INPUTS: { [string]: Enum.KeyCode } = {
+	VRLeftTrigger = Enum.KeyCode.ButtonL2,
+	VRRightTrigger = Enum.KeyCode.ButtonR2,
+	VRLeftGrip = Enum.KeyCode.ButtonL1,
+	VRRightGrip = Enum.KeyCode.ButtonR1,
+	VRLeftStick = Enum.KeyCode.Thumbstick1,
+	VRRightStick = Enum.KeyCode.Thumbstick2,
+	VRLeftStickClick = Enum.KeyCode.ButtonL3,
+	VRRightStickClick = Enum.KeyCode.ButtonR3,
+	VRButtonA = Enum.KeyCode.ButtonA,
+	VRButtonB = Enum.KeyCode.ButtonB,
+	VRButtonX = Enum.KeyCode.ButtonX,
+	VRButtonY = Enum.KeyCode.ButtonY,
+}
+
 local function inputId(name: string): InputId?
 	local mouse = MOUSE_INPUTS[name]
 	if mouse then
 		return mouse
+	end
+
+	local vr = VR_INPUTS[name]
+	if vr then
+		return vr
 	end
 
 	local code = Enum.KeyCode:FromName(name)
@@ -468,19 +502,36 @@ function InputController.mouseLook(config: MouseLook.Config?): MouseLook
 	return look
 end
 
--- The kind of input the player last used: "KeyboardMouse", "Touch" or "Gamepad".
+-- The kind of input the player last used: "KeyboardMouse", "Touch",
+-- "Gamepad", or "VR" while a headset is in use.
 function InputController:device(): Device
 	return device
+end
+
+local function setDevice(newDevice: Device)
+	if newDevice ~= device then
+		device = newDevice
+		InputController.deviceChanged:fire(newDevice)
+	end
 end
 
 -- Internal: update the device from a LastInputType (exposed for tests).
 function InputController._updateDevice(inputType: Enum.UserInputType)
 	local newDevice: Device? = deviceFor(inputType)
-	if newDevice and newDevice ~= device then
-		device = newDevice
-		InputController.deviceChanged:fire(newDevice)
+	if not newDevice then
+		return
+	end
+
+	lastFlat = newDevice
+
+	if not VR.enabled() then
+		setDevice(newDevice)
 	end
 end
+
+VR.enabledChanged:connect(function(enabled: boolean)
+	setDevice(if enabled then "VR" else lastFlat)
+end)
 
 if RunService:IsClient() then
 	UserInputService.LastInputTypeChanged:Connect(InputController._updateDevice)

@@ -25,6 +25,13 @@
               ],
               "children": [
                 {
+                  "name": "MouseLook",
+                  "className": "ModuleScript",
+                  "filePaths": [
+                    "src/MouseLook.luau"
+                  ]
+                },
+                {
                   "name": "Signal",
                   "className": "ModuleScript",
                   "filePaths": [
@@ -73,6 +80,13 @@
                         "src/Touch/Util.luau"
                       ]
                     }
+                  ]
+                },
+                {
+                  "name": "VR",
+                  "className": "ModuleScript",
+                  "filePaths": [
+                    "src/VR.luau"
                   ]
                 }
               ]

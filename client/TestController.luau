@@ -819,10 +819,13 @@ local function runMouseInputTests()
 end
 
 local function runDeviceTests()
+	-- Keep a real headset out of the flat-device checks.
+	RazorInput.VR._setEnabled(false)
+
 	local start = RazorInput:device()
 	assert(
 		start == "KeyboardMouse" or start == "Touch" or start == "Gamepad",
-		"device() should be one of the three devices"
+		"device() should be one of the three flat devices outside VR"
 	)
 
 	local changes: { string } = {}
@@ -848,6 +851,207 @@ local function runDeviceTests()
 	print("✅ Device detection passed")
 end
 
+local function mockGamepad(keyCode: Enum.KeyCode, state: Enum.UserInputState, position: Vector3?): MockInputObject
+	return {
+		KeyCode = keyCode,
+		UserInputType = Enum.UserInputType.Gamepad1,
+		UserInputState = state,
+		Position = position or Vector3.zero,
+	}
+end
+
+local function runVRTests()
+	local VR = RazorInput.VR
+	local Touch = RazorInput.Touch
+
+	VR._setEnabled(false)
+	RazorInput._updateDevice(Enum.UserInputType.Keyboard)
+	assert(not VR.enabled(), "_setEnabled(false) should turn VR off")
+
+	-- Device: VR wins while the headset is on, then the last flat device returns.
+	local changes: { string } = {}
+	local deviceConnection = RazorInput.deviceChanged:connect(function(newDevice: string)
+		table.insert(changes, newDevice)
+	end)
+	local enabledLog: { boolean } = {}
+	local enabledConnection = VR.enabledChanged:connect(function(enabled: boolean)
+		table.insert(enabledLog, enabled)
+	end)
+
+	VR._setEnabled(true)
+	assert(VR.enabled(), "_setEnabled(true) should turn VR on")
+	assert(RazorInput:device() == "VR", "Putting on a headset should switch the device to VR")
+
+	RazorInput._updateDevice(Enum.UserInputType.Gamepad1)
+	RazorInput._updateDevice(Enum.UserInputType.Keyboard)
+	RazorInput._updateDevice(Enum.UserInputType.Gamepad1)
+	assert(RazorInput:device() == "VR", "Other inputs should not leave VR")
+
+	-- Touch controls hide in VR unless forced on.
+	Touch.setVisibility("auto")
+	assert(not Touch.isVisible(), "Touch controls should hide in VR")
+	Touch.setVisibility("always")
+	assert(Touch.isVisible(), "'always' should show touch controls even in VR")
+	Touch.setVisibility("auto")
+
+	VR._setEnabled(false)
+	assert(RazorInput:device() == "Gamepad", "Leaving VR should return to the last device used")
+	assert(joined(changes) == "VR,Gamepad", "deviceChanged should fire on entering and leaving VR: " .. joined(changes))
+	assert(joined(enabledLog) == "true,false", "enabledChanged should fire on each change: " .. joined(enabledLog))
+
+	deviceConnection:disconnect()
+	enabledConnection:disconnect()
+	print("✅ VR device detection passed")
+
+	-- Controller names bind like keys.
+	VR._setEnabled(true)
+
+	local fireLog: { { any } } = {}
+	RazorInput:bindAction("VRFire", function(pressed: boolean, value: Vector3)
+		table.insert(fireLog, { pressed, value })
+	end, "VRRightTrigger")
+
+	RazorInput:input(mockGamepad(Enum.KeyCode.ButtonR2, Enum.UserInputState.Begin, Vector3.new(0, 0, 0.8)) :: any)
+	RazorInput:input(mockGamepad(Enum.KeyCode.ButtonR2, Enum.UserInputState.End) :: any)
+	assert(#fireLog == 2, "VRRightTrigger should press and release")
+	assert(fireLog[1][1] == true and near(fireLog[1][2].Z, 0.8), "The trigger should pass its analog value in Z")
+	assert(fireLog[2][1] == false, "Releasing the trigger should release the bind")
+
+	local moveLog: { Vector3 } = {}
+	RazorInput:bindAxis("VRMove", function(_active: boolean, value: Vector3)
+		table.insert(moveLog, value)
+	end, "VRLeftStick")
+	RazorInput:input(
+		mockGamepad(Enum.KeyCode.Thumbstick1, Enum.UserInputState.Change, Vector3.new(0.5, -0.25, 0)) :: any
+	)
+	assert(
+		#moveLog == 1 and near(moveLog[1], Vector3.new(0.5, -0.25, 0)),
+		"VRLeftStick should pass the stick direction"
+	)
+
+	-- Layouts can move a bind to another controller.
+	RazorInput:createLayout("LeftHanded", { keys = { VRFire = { "VRLeftTrigger" } } })
+	RazorInput:setLayout("LeftHanded")
+	table.clear(fireLog)
+	RazorInput:input(mockGamepad(Enum.KeyCode.ButtonR2, Enum.UserInputState.Begin, Vector3.new(0, 0, 1)) :: any)
+	RazorInput:input(mockGamepad(Enum.KeyCode.ButtonR2, Enum.UserInputState.End) :: any)
+	assert(#fireLog == 0, "The right trigger should stop firing after the layout moves the bind")
+	RazorInput:input(mockGamepad(Enum.KeyCode.ButtonL2, Enum.UserInputState.Begin, Vector3.new(0, 0, 1)) :: any)
+	RazorInput:input(mockGamepad(Enum.KeyCode.ButtonL2, Enum.UserInputState.End) :: any)
+	assert(#fireLog == 2, "The left trigger should fire under the left-handed layout")
+	RazorInput:removeLayout("LeftHanded")
+
+	RazorInput:unbind("VRFire")
+	RazorInput:unbind("VRMove")
+	print("✅ VR controller keys passed")
+
+	-- Poses: relative to the camera, position scaled by HeadScale.
+	local camera = workspace.CurrentCamera
+	local savedCFrame, savedScale = camera.CFrame, camera.HeadScale
+	camera.CFrame = CFrame.new(10, 5, 0)
+	camera.HeadScale = 2
+
+	local hand = VR.hand("Right")
+	assert(RazorInput.Touch.isControl(hand), "A VR hand should be bindable like a control")
+
+	local moves: { { any } } = {}
+	hand.moved:connect(function(world: CFrame, localCFrame: CFrame, tracked: boolean)
+		table.insert(moves, { world, localCFrame, tracked })
+	end)
+
+	VR._setPose("RightHand", CFrame.new(1, 0, -2))
+	VR._step()
+	assert(#moves == 1 and moves[1][3] == true, "A tracked hand should report")
+	assert(near(moves[1][1].Position, Vector3.new(12, 5, -4)), "World pose should apply HeadScale and the camera")
+	assert(near(moves[1][2].Position, Vector3.new(1, 0, -2)), "Local pose should be what VRService reports")
+	assert(hand.tracked and near(hand.cframe.Position, Vector3.new(12, 5, -4)), "The hand should keep its latest pose")
+
+	local world, tracked = VR.pose("RightHand")
+	assert(tracked and near(world.Position, Vector3.new(12, 5, -4)), "VR.pose should match the hand source")
+
+	VR._step()
+	assert(#moves == 1, "An unchanged pose should not fire again")
+
+	-- The pointer follows where the controller faces.
+	VR._setPose("RightHand", CFrame.new(1, 0, -2) * CFrame.Angles(0, math.rad(90), 0))
+	VR._step()
+	local ray = VR.pointer("Right", 10)
+	assert(ray, "A tracked hand should give a pointer")
+	assert(near(ray.Origin, Vector3.new(12, 5, -4)), "The pointer should start at the hand")
+	assert(near(ray.Direction, Vector3.new(-10, 0, 0)), "The pointer should follow the hand's facing and length")
+
+	-- Bound to an axis: action(tracked, worldPosition).
+	local bound: { { any } } = {}
+	RazorInput:bindAxis("VRAim", function(active: boolean, value: Vector3)
+		table.insert(bound, { active, value })
+	end, hand)
+	VR._setPose("RightHand", CFrame.new(0, 1, 0))
+	VR._step()
+	assert(#bound == 1 and bound[1][1] == true, "A bound hand should call the action while tracked")
+	assert(near(bound[1][2], Vector3.new(10, 7, 0)), "A bound hand should pass its world position")
+
+	-- Losing tracking fires once with tracked = false.
+	VR._setPose("RightHand", nil)
+	VR._step()
+	local last = moves[#moves]
+	assert(last[3] == false and not hand.tracked, "Losing tracking should report tracked = false")
+	assert(bound[#bound][1] == false, "Losing tracking should deactivate the bind")
+	assert(VR.pointer("Right") == nil, "An untracked hand should have no pointer")
+
+	-- Leaving VR does too.
+	VR._setPose("RightHand", CFrame.new(0, 1, 0))
+	VR._step()
+	assert(hand.tracked, "The hand should be tracked again")
+	VR._setEnabled(false)
+	VR._step()
+	assert(not hand.tracked and moves[#moves][3] == false, "Leaving VR should report tracked = false")
+	VR._setEnabled(true)
+
+	-- Disabled sources stop reporting.
+	VR._step()
+	hand:setEnabled(false)
+	assert(not hand.tracked, "Disabling should report tracked = false")
+	local count = #moves
+	VR._setPose("RightHand", CFrame.new(0, 2, 0))
+	VR._step()
+	assert(#moves == count, "A disabled hand should not report")
+	hand:setEnabled(true)
+	VR._step()
+	assert(#moves == count + 1 and hand.tracked, "Re-enabling should resume reporting")
+
+	RazorInput:unbind("VRAim")
+	local boundCount = #bound
+	VR._setPose("RightHand", CFrame.new(0, 3, 0))
+	VR._step()
+	assert(#bound == boundCount, "unbind should detach the hand")
+
+	-- The head.
+	local head = VR.head()
+	VR._setPose("Head", CFrame.new(0, 1.5, 0))
+	VR._step()
+	assert(head.tracked and near(head.cframe.Position, Vector3.new(10, 8, 0)), "The head should report its world pose")
+
+	hand:destroy()
+	head:destroy()
+	assert(hand.destroyed and head.destroyed, "destroy should mark the sources destroyed")
+	print("✅ VR poses passed")
+
+	-- Haptics: safe to call without a headset, and hands are checked.
+	VR.pulse("Right", 0.5, 0.05)
+	VR.pulse("Left")
+	VR.stopHaptics("Left")
+	VR.stopHaptics()
+	assert(not pcall(VR.pulse, "Middle"), "pulse should reject an unknown hand")
+	assert(not pcall(VR.hand, "Middle"), "hand should reject an unknown hand")
+	print("✅ VR haptics passed")
+
+	camera.CFrame = savedCFrame
+	camera.HeadScale = savedScale
+	VR._setPose("RightHand", nil)
+	VR._setPose("Head", nil)
+	VR._setEnabled(nil)
+end
+
 function mod:start()
 	print("Starting RazorInput tests...")
 
@@ -858,6 +1062,7 @@ function mod:start()
 		runMouseTests()
 		runMouseInputTests()
 		runDeviceTests()
+		runVRTests()
 	end)
 
 	if not success then

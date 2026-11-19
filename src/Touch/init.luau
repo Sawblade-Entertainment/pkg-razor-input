@@ -19,6 +19,7 @@ local Gestures = require(script.Gestures)
 local Thumbstick = require(script.Thumbstick)
 local Touchpad = require(script.Touchpad)
 local Util = require(script.Util)
+local VR = require(script.Parent.VR)
 
 export type Thumbstick = Thumbstick.Thumbstick
 export type Button = Button.Button
@@ -46,6 +47,11 @@ local function shouldShow(): boolean
 	if visibility == "always" then
 		return true
 	elseif visibility == "never" then
+		return false
+	end
+
+	-- On-screen sticks are no use in a headset.
+	if VR.enabled() then
 		return false
 	end
 
@@ -109,6 +115,7 @@ function Touch.gui(): ScreenGui
 	if not listening then
 		listening = true
 		UserInputService.LastInputTypeChanged:Connect(updateVisibility)
+		VR.enabledChanged:connect(updateVisibility)
 	end
 
 	gui.Enabled = shouldShow()
@@ -116,8 +123,8 @@ function Touch.gui(): ScreenGui
 	return gui
 end
 
--- "auto" (default) shows the controls while the player is using touch,
--- "always" / "never" force them on or off.
+-- "auto" (default) shows the controls while the player is using touch (never
+-- in VR), "always" / "never" force them on or off.
 function Touch.setVisibility(mode: Visibility)
 	visibility = mode
 	updateVisibility()
